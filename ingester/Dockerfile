@@ -9,13 +9,13 @@
 
 FROM python:3.12-slim
 
-# System packages:
-#   curl  - used by the healthcheck CMD and useful for debugging
-#   ca-certificates - needed for HTTPS calls to the IODA API
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+# # System packages:
+# #   curl  - used by the healthcheck CMD and useful for debugging
+# #   ca-certificates - needed for HTTPS calls to the IODA API
+# RUN apt-get update && apt-get install -y --no-install-recommends \
+#     curl \
+#     ca-certificates \
+#     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
