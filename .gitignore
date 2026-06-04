@@ -1,3 +1,4 @@
 bronze
 .env
-__pycache__
+/ingester/__pycache__
+/ingester/__pycache__
