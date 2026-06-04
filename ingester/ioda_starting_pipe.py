@@ -70,7 +70,7 @@ S3_ACCESS_KEY        = os.environ.get("S3_ACCESS_KEY",          "ioda_admin")
 S3_SECRET_KEY        = os.environ.get("S3_SECRET_KEY",          "")
 S3_BUCKET_BRONZE     = os.environ.get("S3_BUCKET_BRONZE",       "ioda-bronze")
 ENTITY_TYPE          = os.environ.get("ENTITY_TYPE",            "country")
-ENTITY_CODES         = os.environ.get("ENTITY_CODES",           "IT").split()
+ENTITY_CODES         = os.environ.get("ENTITY_CODES",           "GM").split()
 LOOKBACK_MINUTES     = int(os.environ.get("LOOKBACK_MINUTES",   "20"))
 POLL_INTERVAL_SEC    = int(os.environ.get("POLL_INTERVAL_SECONDS","900"))
 
@@ -181,11 +181,12 @@ def _build_s3_client():
 def _paginate_alerts(entity_type: str, entity_code: str, datasource: str,
                      from_ts: int, until_ts: int) -> Generator[dict, None, None]:
     page = 0
-    endpoint = f"/outages/alerts/{entity_type}/{entity_code}"
+    endpoint = f"/outages/alerts"
     while True:
         data = _api_get(endpoint, {"from": from_ts, "until": until_ts,
                                    "datasource": datasource,
-                                   "limit": PAGE_SIZE, "page": page})
+                                   "limit": PAGE_SIZE, "page": page, 
+                                   "entityCode": entity_code, "entityType": entity_type})
         if not data:
             break
         yield from data
@@ -197,11 +198,12 @@ def _paginate_alerts(entity_type: str, entity_code: str, datasource: str,
 def _paginate_events(entity_type: str, entity_code: str,
                      from_ts: int, until_ts: int) -> Generator[dict, None, None]:
     page = 0
-    endpoint = f"/outages/events/{entity_type}/{entity_code}"
+    endpoint = f"/outages/events"
     while True:
         data = _api_get(endpoint, {"from": from_ts, "until": until_ts,
                                    "format": "ioda", "includeAlerts": "true",
-                                   "limit": PAGE_SIZE, "page": page})
+                                   "limit": PAGE_SIZE, "page": page,
+                                   "entityCode": entity_code, "entityType": entity_type})
         if not data:
             break
         yield from data
@@ -212,9 +214,10 @@ def _paginate_events(entity_type: str, entity_code: str,
 
 def _fetch_signals(entity_type: str, entity_code: str, datasource: str,
                    from_ts: int, until_ts: int) -> list[dict]:
-    return _api_get(f"/signals/{entity_type}/{entity_code}",
+    return _api_get(f"/signals",
                     {"from": from_ts, "until": until_ts,
-                     "datasource": datasource, "maxPoints": 1440})
+                    "datasource": datasource, "maxPoints": 1440,
+                    "entityCode": entity_code, "entityType": entity_type})
 
 
 def _expand_signal(records: list[dict]) -> list[dict]:
