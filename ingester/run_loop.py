@@ -20,7 +20,7 @@ import signal
 import sys
 import time
 
-from ioda_ingest import (
+from ioda_starting_pipe import (
     POLL_INTERVAL_SEC,
     _build_kafka_producer,
     _build_s3_client,
