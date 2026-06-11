@@ -1,5 +1,30 @@
-bronze
+# Environment & credentials
 .env
-ingester\__pycache__
-ingester/__pycache__/ioda_starting_pipe.cpython-312.pyc
-/ingester/__pycache__
+.env.backup
+.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Docker local data volumes
+bronze/
+silver/
+gold/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
