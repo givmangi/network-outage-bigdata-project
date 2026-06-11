@@ -225,9 +225,9 @@ services:
       S3_BUCKET_BRONZE: "ioda-bronze"
       # Ingestion config
       ENTITY_TYPE: "${ENTITY_TYPE:-country}"
-      ENTITY_CODES: "${ENTITY_CODES:-IT}"
-      LOOKBACK_MINUTES: "${LOOKBACK_MINUTES:-20}"
-      POLL_INTERVAL_SECONDS: "${POLL_INTERVAL_SECONDS:-900}"
+      ENTITY_CODES: "${ENTITY_CODES:-IQ}"
+      LOOKBACK_MINUTES: "${LOOKBACK_MINUTES:-360}"
+      POLL_INTERVAL_SECONDS: "${POLL_INTERVAL_SECONDS:-300}"
     networks:
       - ioda-net
     volumes:
