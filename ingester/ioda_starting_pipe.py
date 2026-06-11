@@ -74,7 +74,7 @@ ENTITY_CODES         = os.environ.get("ENTITY_CODES",           "GM").split()
 LOOKBACK_MINUTES     = int(os.environ.get("LOOKBACK_MINUTES",   "20"))
 POLL_INTERVAL_SEC    = int(os.environ.get("POLL_INTERVAL_SECONDS","900"))
 
-DATASOURCES   = ["bgp", "ping-slash24", "ucsd-nt"]
+DATASOURCES   = ["bgp", "ping-slash24", "merit-nt"]
 PAGE_SIZE     = 100
 REQUEST_DELAY = 1.1   # seconds between IODA API calls
 
@@ -214,10 +214,10 @@ def _paginate_events(entity_type: str, entity_code: str,
 
 def _fetch_signals(entity_type: str, entity_code: str, datasource: str,
                    from_ts: int, until_ts: int) -> list[dict]:
-    return _api_get(f"/signals",
+    return _api_get(f"/signals/raw/{entity_type}/{entity_code}",
                     {"from": from_ts, "until": until_ts,
-                    "datasource": datasource, "maxPoints": 1440,
-                    "entityCode": entity_code, "entityType": entity_type})
+                    "datasource": datasource, "maxPoints": 1440})
+                    # "entityCode": entity_code, "entityType": entity_type})
 
 
 def _expand_signal(records: list[dict]) -> list[dict]:
@@ -226,6 +226,9 @@ def _expand_signal(records: list[dict]) -> list[dict]:
     one flat dict per time step with an explicit 'ts' field.
     Null values are kept — they indicate IODA collection gaps.
     """
+    # records is [[{...}]] — unwrap the outer list if needed
+    if records and isinstance(records[0], list):
+        records = records[0]
     expanded = []
     for r in records:
         base, step = r.get("from", 0), r.get("step", 60)
@@ -317,16 +320,38 @@ def _dual_write(
 
     # Seek back to start of buffer and upload
     buf.seek(0)
-    s3_client.put_object(
-        Bucket=S3_BUCKET_BRONZE,
-        Key=s3_key,
-        Body=buf,
-        ContentType="application/x-ndjson",
-        ContentEncoding="gzip",
-    )
+    _s3_put_with_retry(
+        bucket=S3_BUCKET_BRONZE,
+        key=s3_key,
+        body=buf,
+        s3_client=s3_client,
+        )
     log.info("  MinIO ← s3://%s/%s  (%d records)", S3_BUCKET_BRONZE, s3_key, count)
     return count
 
+
+# In ioda_ingest.py, replace the put_object call in _dual_write() with:
+
+
+def _s3_put_with_retry(s3_client, bucket, key, body, max_attempts=3):
+    delay = 2
+    for attempt in range(1, max_attempts + 1):
+        try:
+            s3_client.put_object(
+                Bucket = bucket,
+                Key=key, Body=body,
+                ContentType="application/x-ndjson",
+                ContentEncoding="gzip",
+            )
+            return
+        except ClientError as exc:
+            if attempt == max_attempts:
+                raise
+            log.warning("MinIO put failed (attempt %d/%d): %s — retrying in %ds",
+                        attempt, max_attempts, exc, delay)
+            time.sleep(delay)
+            delay *= 2
+            body.seek(0)   # rewind the BytesIO buffer before retrying
 
 # ---------------------------------------------------------------------------
 # Per-entity ingestion orchestrator

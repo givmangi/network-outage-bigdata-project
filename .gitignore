@@ -1,4 +1,5 @@
 bronze
 .env
-/ingester/__pycache__
+ingester\__pycache__
+ingester/__pycache__/ioda_starting_pipe.cpython-312.pyc
 /ingester/__pycache__
