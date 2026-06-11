@@ -24,7 +24,7 @@ Data flow per ingestion run:
                           ┌───────────┴────────────┐
                           ▼                         ▼
                Kafka topic                    MinIO bucket
-          raw.ioda.alerts                  ioda-bronze/
+          raw.ioda.alerts                  bronze/
           raw.ioda.events              ioda/alerts/year=.../
           raw.ioda.signals             ioda/events/year=.../
                                        ioda/signals/year=.../
@@ -35,7 +35,7 @@ Kafka topics created:
   raw.ioda.signals  - one message per expanded time-step row, key = entity_code
 
 MinIO object layout (Hive-partitioned for Spark):
-  ioda-bronze/
+  bronze/
     ioda/alerts/year=YYYY/month=MM/day=DD/<entity_type>_<code>_<datasource>.ndjson.gz
     ioda/events/year=YYYY/month=MM/day=DD/<entity_type>_<code>.ndjson.gz
     ioda/signals/year=YYYY/month=MM/day=DD/<entity_type>_<code>_<datasource>.ndjson.gz
@@ -66,9 +66,9 @@ from urllib3.util.retry import Retry
 IODA_BASE_URL        = os.environ.get("IODA_BASE_URL",         "https://api.ioda.inetintel.cc.gatech.edu/v2")
 KAFKA_BOOTSTRAP      = os.environ.get("KAFKA_BOOTSTRAP_SERVERS","kafka:29092")
 S3_ENDPOINT          = os.environ.get("S3_ENDPOINT_URL",        "http://minio:9000")
-S3_ACCESS_KEY        = os.environ.get("S3_ACCESS_KEY",          "ioda_admin")
+S3_ACCESS_KEY        = os.environ.get("S3_ACCESS_KEY",          "admin")
 S3_SECRET_KEY        = os.environ.get("S3_SECRET_KEY",          "")
-S3_BUCKET_BRONZE     = os.environ.get("S3_BUCKET_BRONZE",       "ioda-bronze")
+S3_BUCKET_BRONZE     = os.environ.get("S3_BUCKET_BRONZE",       "bronze")
 ENTITY_TYPE          = os.environ.get("ENTITY_TYPE",            "country")
 ENTITY_CODES         = os.environ.get("ENTITY_CODES",           "GM").split()
 LOOKBACK_MINUTES     = int(os.environ.get("LOOKBACK_MINUTES",   "20"))
@@ -87,7 +87,7 @@ logging.basicConfig(
     format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%SZ",
 )
-log = logging.getLogger("ioda_bronze")
+log = logging.getLogger("bronze_ingestion")
 
 
 # ---------------------------------------------------------------------------

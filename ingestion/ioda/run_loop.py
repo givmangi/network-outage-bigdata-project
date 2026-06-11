@@ -20,7 +20,7 @@ import signal
 import sys
 import time
 
-from ioda_starting_pipe import (
+from starting_pipe import (
     POLL_INTERVAL_SEC,
     _build_kafka_producer,
     _build_s3_client,
@@ -77,7 +77,7 @@ def _wait_for_services(max_attempts: int = 10) -> tuple:
             s3       = _build_s3_client()
 
             # Probe MinIO: list bucket to confirm credentials and network work
-            s3.list_objects_v2(Bucket=os.environ.get("S3_BUCKET_BRONZE", "ioda-bronze"),
+            s3.list_objects_v2(Bucket=os.environ.get("S3_BUCKET_BRONZE", "bronze"),
                                 MaxKeys=1)
 
             log.info("Connected to Kafka and MinIO successfully.")

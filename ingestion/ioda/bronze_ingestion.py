@@ -31,7 +31,7 @@ Directory layout produced (example for a run on 2026-06-04):
 
 Usage (manual / cron):
   # One-shot historical backfill for Italy, last 7 days:
-  python ioda_bronze_ingestion.py \
+  python bronze_ingestion.py \
       --mode backfill \
       --entity-type country \
       --entity-codes IT \
@@ -39,7 +39,7 @@ Usage (manual / cron):
       --output-dir ./bronze
 
   # Incremental run (fetches last N minutes, safe to run via cron):
-  python ioda_bronze_ingestion.py \
+  python bronze_ingestion.py \
       --mode incremental \
       --entity-type country \
       --entity-codes IT DE FR \
@@ -47,7 +47,7 @@ Usage (manual / cron):
       --output-dir ./bronze
 
   # ASN-level ingestion:
-  python ioda_bronze_ingestion.py \
+  python bronze_ingestion.py \
       --mode incremental \
       --entity-type asn \
       --entity-codes 1299 3356 6762 \
@@ -117,7 +117,7 @@ logging.basicConfig(
     format="%(asctime)s  %(levelname)-8s  %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-log = logging.getLogger("ioda_bronze")
+log = logging.getLogger("bronze_ingestion")
 
 
 # ---------------------------------------------------------------------------
