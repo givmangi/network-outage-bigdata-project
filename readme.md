@@ -122,11 +122,24 @@ All services should show `healthy` or `running`.
 
 ## Backfill historical data
 
-Use `backfill.py` to load historical data for one or all countries:
+Use `backfill.py` to load historical data for one or more countries:
 
-    python backfill.py --days 7               # all countries, 7 days
-    python backfill.py --countries IT IQ       # specific countries, 30 days
-    python backfill.py --dry-run              # preview without running
+    python3 backfill.py --days 7                        # all countries, 7 days
+    python3 backfill.py --countries IT IQ               # specific countries, 30 days
+    python3 backfill.py --dry-run                       # preview without running
+
+### Recommended set
+
+15 countries covering conflict zones, shutdown-prone governments, and stable baselines (~20 min for 7 days, ~1h for 30 days):
+
+```bash
+python3 backfill.py --countries IT MM IN PK UA RU PS SY IR TR BD NG US DE GB --days 30
+```
+
+> [!WARNING]
+> Running without `--countries` fetches all 253 countries from the IODA API
+> and runs them sequentially. At ~75 seconds per country this takes approximately 5 hours.
+> For a first run use the recommended set above or specify countries manually.
 
 ## Inspect the Bronze layer in MinIO
 
