@@ -122,34 +122,11 @@ All services should show `healthy` or `running`.
 
 ## Backfill historical data
 
-Run a 30-day backfill for Italy:
+Use `backfill.py` to load historical data for one or all countries:
 
-```bash
-docker compose run --rm ingester python run_loop.py backfill 30
-```
-
-For a different country (overrides .env for this run only):
-
-```bash
-docker compose run --rm -e ENTITY_CODES="IT" ingester python run_loop.py backfill 30
-```
-
-Multiple countries (run separately to avoid rate-limiting the IODA API):
-
-```bash
-docker compose run --rm -e ENTITY_CODES="IT" ingester python run_loop.py backfill 30
-docker compose run --rm -e ENTITY_CODES="IQ" ingester python run_loop.py backfill 30
-docker compose run --rm -e ENTITY_CODES="UA" ingester python run_loop.py backfill 30
-```
-
-ASN-level backfill:
-
-```bash
-docker compose run --rm \
-    -e ENTITY_TYPE=asn \
-    -e ENTITY_CODES="3269 12874 30722" \
-    ingester python run_loop.py backfill 7
-```
+    python backfill.py --days 7               # all countries, 7 days
+    python backfill.py --countries IT IQ       # specific countries, 30 days
+    python backfill.py --dry-run              # preview without running
 
 ## Inspect the Bronze layer in MinIO
 
