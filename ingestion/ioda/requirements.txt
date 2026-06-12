@@ -1,0 +1,6 @@
+requests==2.32.*
+kafka-python==2.0.*
+boto3==1.34.*
+botocore==1.34.*
+urllib3==2.2.*
+ 

@@ -1,11 +1,15 @@
-# IODA Bronze Layer Stack
+# Network Outage & Service Quality Intelligence Platform
 
-Docker Compose setup for the IODA ingestion pipeline.
-Runs Kafka, MinIO, Kafka UI, and the Python ingester as isolated containers.
+A big data platform that aggregates network measurements and outage indicators
+to detect degraded connectivity, local outages, and persistent performance issues.
+Compares providers, regions, and time windows to identify recurring failure patterns.
+
+**Current status:** Bronze ingestion layer — IODA data source.
+RIPE Atlas ingestion coming next.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  ioda-net (Docker bridge network)                            │
+│  outage-net (Docker bridge network)                          │
 │                                                              │
 │  ┌──────────────┐    raw.ioda.*    ┌─────────────────────┐  │
 │  │   ingester   │ ──── topics ───► │      kafka          │  │
@@ -22,9 +26,54 @@ Runs Kafka, MinIO, Kafka UI, and the Python ingester as isolated containers.
 └──────────────────────────────────────────────────────────────┘
 ```
 
+## Project structure
+
+```
+network-outage-bigdata-project/
+├── config/
+│   ├── kafka/                   # Kafka setup scripts (coming soon)
+│   └── minio/
+│       ├── init_minio.py        # One-shot bucket creation on first boot
+│       └── Dockerfile
+├── ingestion/
+│   ├── ioda/                    # IODA data source
+│   │   ├── bronze_ingestion.py  # Standalone local ingestion script
+│   │   ├── starting_pipe.py     # Docker ingestion logic (Kafka + MinIO)
+│   │   ├── run_loop.py          # Container entrypoint + polling loop
+│   │   ├── requirements.txt
+│   │   └── Dockerfile
+│   └── ripe/                    # RIPE Atlas (coming soon)
+├── spark-jobs/                  # Silver/Gold Spark jobs (coming soon)
+├── dashboard/                   # Streamlit dashboard (coming soon)
+├── docker-compose.yml
+├── .env.example                 # Credential template — copy to .env
+├── .env                         # Your credentials (git-ignored, never commit)
+└── README.md
+```
+
+## Data flow
+
+```
+IODA API → ingester → Kafka topics (raw.ioda.alerts / events / signals)
+                    → MinIO bronze bucket (partitioned NDJSON.gz)
+
+bronze/
+  ioda/
+    alerts/year=YYYY/month=MM/day=DD/country_IT_bgp.ndjson.gz
+    events/year=YYYY/month=MM/day=DD/country_IT.ndjson.gz
+    signals/year=YYYY/month=MM/day=DD/country_IT_bgp.ndjson.gz
+```
+
 ## First-time setup
 
-### 1. Generate a Kafka cluster ID
+### 1. Clone the repo
+
+```bash
+git clone https://github.com/givmangi/network-outage-bigdata-project.git
+cd network-outage-bigdata-project
+```
+
+### 2. Generate a Kafka cluster ID
 
 ```bash
 docker run --rm confluentinc/cp-kafka:7.6.1 kafka-storage random-uuid
@@ -32,7 +81,7 @@ docker run --rm confluentinc/cp-kafka:7.6.1 kafka-storage random-uuid
 
 Copy the output — you need it in the next step.
 
-### 2. Create your .env file
+### 3. Create your .env file
 
 ```bash
 cp .env.example .env
@@ -40,10 +89,9 @@ cp .env.example .env
 
 Open `.env` and fill in:
 - `KAFKA_CLUSTER_ID` — the UUID you just generated
-- `MINIO_ROOT_PASSWORD` — choose a strong password (min 16 chars)
-- `ENTITY_CODES` — space-separated country codes or ASNs to ingest
+- `MINIO_ROOT_PASSWORD` — choose a strong password (min 8 chars)
 
-### 3. Start the stack
+### 4. Start the stack
 
 ```bash
 docker compose up -d
@@ -54,10 +102,10 @@ Watch startup:
 docker compose logs -f
 ```
 
-Wait until you see `ioda-minio-init` print `Buckets ready.` and exit,
-and `ioda-ingester` print `Connected to Kafka and MinIO successfully.`
+Wait until you see `minio-init` print `All buckets ready.` and exit,
+and `ingester` print `Connected to Kafka and MinIO successfully.`
 
-### 4. Verify everything is running
+### 5. Verify everything is running
 
 ```bash
 docker compose ps
@@ -67,27 +115,34 @@ All services should show `healthy` or `running`.
 
 ## Web UIs
 
-| Service    | URL                     | Credentials                      |
-|------------|-------------------------|-----------------------------------|
-| Kafka UI   | http://localhost:8080   | none                              |
-| MinIO      | http://localhost:9001   | MINIO_ROOT_USER / MINIO_ROOT_PASSWORD from .env |
+| Service   | URL                   | Credentials                                     |
+|-----------|-----------------------|-------------------------------------------------|
+| Kafka UI  | http://localhost:8080 | none                                            |
+| MinIO     | http://localhost:9001 | MINIO_ROOT_USER / MINIO_ROOT_PASSWORD from .env |
 
 ## Backfill historical data
 
-Run a 7-day backfill for Italy:
+Run a 30-day backfill for Italy:
 
 ```bash
-docker compose run --rm ingester python run_loop.py backfill 7
+docker compose run --rm ingester python run_loop.py backfill 30
 ```
 
-For a different set of entities (overrides .env for this run only):
+For a different country (overrides .env for this run only):
 
 ```bash
-docker compose run --rm -e ENTITY_CODES="IT DE FR" -e ENTITY_TYPE=country \
-    ingester python run_loop.py backfill 14
+docker compose run --rm -e ENTITY_CODES="IT" ingester python run_loop.py backfill 30
 ```
 
-ASN-level backfill (Telecom Italia, Fastweb, Vodafone IT):
+Multiple countries (run separately to avoid rate-limiting the IODA API):
+
+```bash
+docker compose run --rm -e ENTITY_CODES="IT" ingester python run_loop.py backfill 30
+docker compose run --rm -e ENTITY_CODES="IQ" ingester python run_loop.py backfill 30
+docker compose run --rm -e ENTITY_CODES="UA" ingester python run_loop.py backfill 30
+```
+
+ASN-level backfill:
 
 ```bash
 docker compose run --rm \
@@ -99,7 +154,7 @@ docker compose run --rm \
 ## Inspect the Bronze layer in MinIO
 
 ### Via web console
-Go to http://localhost:9001, log in, open the `ioda-bronze` bucket.
+Go to http://localhost:9001, log in, open the `bronze` bucket.
 You will see the Hive-partitioned directory tree:
 ```
 ioda/alerts/year=2026/month=06/day=04/country_IT_bgp.ndjson.gz
@@ -107,13 +162,14 @@ ioda/events/year=2026/month=06/day=04/country_IT.ndjson.gz
 ioda/signals/year=2026/month=06/day=04/country_IT_bgp.ndjson.gz
 ```
 
-### Via mc (MinIO client)
+### Via Docker
 ```bash
-# List all objects for today
-docker compose exec minio mc ls --recursive local/ioda-bronze/ioda/alerts/
+# Count total files in bronze
+docker compose exec minio mc ls --recursive local/bronze | wc -l
 
 # Download and inspect a file
-docker compose exec minio mc cat local/ioda-bronze/ioda/events/year=2026/month=06/day=04/country_IT.ndjson.gz \
+docker compose exec minio mc cat \
+    local/bronze/ioda/signals/year=2026/month=06/day=04/country_IT_bgp.ndjson.gz \
     | gunzip | head -5 | python3 -m json.tool
 ```
 
@@ -125,11 +181,9 @@ Go to http://localhost:8080 → Topics. You will see:
 - `raw.ioda.events`
 - `raw.ioda.signals`
 
-Click any topic to browse individual messages.
-
-### Via kcat (install separately: `brew install kcat` or `apt install kafkacat`)
+### Via kcat
 ```bash
-# Print last 10 messages from raw.ioda.events
+# Install: brew install kcat  or  apt install kafkacat
 kcat -b localhost:9092 -t raw.ioda.events -o -10 -e | python3 -m json.tool
 ```
 
@@ -139,52 +193,36 @@ kcat -b localhost:9092 -t raw.ioda.events -o -10 -e | python3 -m json.tool
 # Stop containers but keep data volumes intact
 docker compose down
 
-# Stop AND delete all data (destructive — only for full reset)
+# Stop AND delete all data (full reset)
 docker compose down -v
 ```
 
-## Rebuild the ingester after code changes
+## Rebuild after code changes
 
 ```bash
 docker compose build ingester
 docker compose up -d ingester
 ```
 
-Because `./ingester` is mounted as a volume, Python file changes take effect
-on container restart without a rebuild. Dependency changes (requirements.txt)
-do require a rebuild.
+Because `./ingestion/ioda` is mounted as a volume, Python file changes
+take effect on container restart without a rebuild. Dependency changes
+(requirements.txt) do require a rebuild.
 
-## Connect Spark to MinIO
+## Connect Spark to MinIO (Silver layer — coming soon)
 
-In your PySpark job (Phase 3), configure the S3A connector:
+In your PySpark job, configure the S3A connector:
 
 ```python
 spark = SparkSession.builder \
-    .appName("ioda-batch") \
-    .config("spark.hadoop.fs.s3a.endpoint",            "http://localhost:9000") \
-    .config("spark.hadoop.fs.s3a.access.key",          "ioda_admin") \
-    .config("spark.hadoop.fs.s3a.secret.key",          "<your_password>") \
-    .config("spark.hadoop.fs.s3a.path.style.access",   "true") \
+    .appName("silver-job") \
+    .config("spark.hadoop.fs.s3a.endpoint",          "http://localhost:9000") \
+    .config("spark.hadoop.fs.s3a.access.key",        "admin") \
+    .config("spark.hadoop.fs.s3a.secret.key",        "<MINIO_ROOT_PASSWORD>") \
+    .config("spark.hadoop.fs.s3a.path.style.access", "true") \
     .config("spark.hadoop.fs.s3a.impl",
             "org.apache.hadoop.fs.s3a.S3AFileSystem") \
     .getOrCreate()
 
-# Read the Bronze alerts
-df = spark.read.json("s3a://ioda-bronze/ioda/alerts/year=2026/month=06/")
-```
-
-## File map
-
-```
-ioda-stack/
-├── docker-compose.yml       # service definitions
-├── .env.example             # credential template (copy to .env)
-├── .env                     # your credentials (git-ignored)
-├── .gitignore
-├── README.md
-└── ingester/
-    ├── Dockerfile            # Python 3.12 slim image
-    ├── requirements.txt      # pinned dependencies
-    ├── ioda_ingest.py        # core ingestion logic (Kafka + MinIO)
-    └── run_loop.py           # container entrypoint + polling loop
+# Read Bronze IODA signals
+df = spark.read.json("s3a://bronze/ioda/signals/year=2026/month=06/")
 ```
