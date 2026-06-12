@@ -14,6 +14,22 @@ Usage:
 Must be run from the repo root with the Docker stack already up:
     docker compose up -d
     python backfill.py --days 7
+
+Default country set (15 countries, ~20 min for 30-day backfill):
+  IT MM IN PK UA RU PS SY IR TR BD NG US DE GB
+
+Selected for: 
+    IT (home country, AGCOM validation), 
+    MM/IN/PK (top 3 shutdown frequency 2024), 
+    UA/RU/PS/SY (active conflict zones), 
+    IR/TR/BD (persistent censorship), 
+    NG (Africa's largest market), 
+    US/DE/GB (stable Western baselines).
+
+WARNING: running without --countries fetches all 253 countries from the IODA API
+and runs them sequentially. At ~75 seconds per country this takes approximately
+5 hours. For a first run, use --countries IT IQ UA TR NG or similar to target
+specific countries.
 """
 
 import argparse
@@ -39,13 +55,10 @@ def fetch_all_country_codes() -> list[str]:
             headers={"User-Agent": "IODA-Backfill/1.0 (UniTrento)"},
         )
         resp.raise_for_status()
-        data = resp.json().get("data", {})
+        data = resp.json().get("data", [])
 
-        # Response is {"data": {"country": [{"code": "IT", ...}, ...]}}
-        entities = data.get("country", [])
-        if not entities:
-            # Some API versions wrap differently
-            entities = data if isinstance(data, list) else []
+        # Response is {"data": [{"code": "IT", "name": "Italy", ...}, ...]}
+        entities = data if isinstance(data, list) else []
 
         codes = sorted(e["code"] for e in entities if "code" in e)
         if not codes:
