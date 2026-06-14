@@ -235,6 +235,36 @@ services:
       - ./ingestion/ioda:/app
 
 # -------------------------------------------------------------------------
+# RIPE Atlas Ingester (Streaming)
+# -------------------------------------------------------------------------
+  ripe-ingester:
+    build:
+      context: ./ingestion/ripe
+      dockerfile: Dockerfile
+    container_name: ripe-ingester
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      # Override the "localhost" defaults from the Python script 
+      # so it uses the internal Docker network names instead!
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:29092"
+      S3_ENDPOINT_URL: "http://minio:9000"
+      
+      # Pass the secure credentials from your .env file
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD}"
+      RIPE_BUCKET_BRONZE: "ripe-bronze"
+    networks:
+      - outage-net
+    volumes:
+      # Mount the script directory so code changes apply immediately
+      - ./ingestion/ripe:/app
+
+# -------------------------------------------------------------------------
 # Named volumes — data persists across container restarts
 # -------------------------------------------------------------------------
 volumes:
