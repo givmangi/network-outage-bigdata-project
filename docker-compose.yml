@@ -257,7 +257,7 @@ services:
       # Pass the secure credentials from your .env file
       MINIO_ROOT_USER: "${MINIO_ROOT_USER}"
       MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD}"
-      RIPE_BUCKET_BRONZE: "ripe-bronze"
+      S3_BUCKET_BRONZE: "bronze"
     networks:
       - outage-net
     volumes:
