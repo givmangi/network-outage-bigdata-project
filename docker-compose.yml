@@ -1,30 +1,22 @@
 ---
 # Internet Outage Intelligence Stack
 # ====================================
-# Services (always-on, started by 'docker compose up -d'):
-#   kafka              - Message broker (KRaft mode, no Zookeeper)
-#   kafka-ui           - Web UI — http://localhost:8080
-#   minio              - S3-compatible object storage
-#   minio-init         - One-shot: creates bronze/silver/gold buckets + removes stale ones
-#   ingester           - IODA bronze ingestion polling loop
-#   ripe-ingester      - RIPE Atlas WebSocket streaming ingestion
-#   spark-silver-stream- Spark Structured Streaming: Kafka → Silver (live path)
+# Directory layout (from project root):
+#   ./ingestion/ioda/   - IODA ingester source + Dockerfile
+#   ./ingestion/ripe/   - RIPE Atlas ingester source + Dockerfile
+#   ./spark-jobs/       - PySpark silver layer scripts + entrypoint.sh
 #
-# On-demand batch jobs (run explicitly, exit when done):
-#   spark-silver-ioda  - IODA Bronze → Silver batch backfill
-#   spark-silver-ripe  - RIPE Bronze → Silver batch backfill
+# Data flow:
+#   IODA API   -> ingester        -> Kafka (raw.ioda.*) + MinIO (bronze/ioda/...)
+#   RIPE WS    -> ripe-ingester   -> Kafka (raw.ripe.ping) + MinIO (bronze/ripe/...)
+#   MinIO bronze + Kafka -> Spark -> MinIO (silver/...)
 #
-# Quick start:
-#   cp .env.example .env
-#   docker compose up -d
+# Services (always-on):
+#   kafka, kafka-ui, minio, minio-init, ingester, ripe-ingester, spark-silver-stream
 #
-# First-time Silver backfill (run after ingesters have populated Bronze):
-#   docker compose run --rm --no-deps spark-silver-ioda
-#   docker compose run --rm --no-deps spark-silver-ripe
-#
-# Cleanup stale MinIO buckets (ioda-bronze, ioda-silver):
-#   docker compose restart minio-init
-#   (minio-init now removes them automatically on every startup)
+# On-demand batch Silver jobs:
+#   docker compose run --rm --no-deps spark-silver-ioda [--start YYYY-MM-DD] [--end YYYY-MM-DD]
+#   docker compose run --rm --no-deps spark-silver-ripe  [--start YYYY-MM-DD] [--end YYYY-MM-DD]
 
 services:
 
@@ -87,7 +79,7 @@ services:
       - ioda-net
 
   # -------------------------------------------------------------------------
-  # MinIO — S3-compatible object storage
+  # MinIO — S3-compatible object storage (bronze + silver + gold)
   # Ports: 9000 (S3 API), 9001 (web console — http://localhost:9001)
   # -------------------------------------------------------------------------
   minio:
@@ -115,11 +107,8 @@ services:
   # -------------------------------------------------------------------------
   # MinIO init — bucket housekeeping (runs on every stack start)
   # -------------------------------------------------------------------------
-  # Creates the canonical bronze/silver/gold buckets.
-  # Also removes the stale ioda-bronze and ioda-silver buckets that were
-  # created by the original docker-compose and are no longer used.
-  # 'restart: on-failure' means it will retry if MinIO isn't ready yet,
-  # but won't loop once it exits 0.
+  # Creates bronze, silver, gold buckets.
+  # Removes stale ioda-bronze and ioda-silver buckets from the original compose.
   # -------------------------------------------------------------------------
   minio-init:
     image: minio/mc:RELEASE.2024-04-18T16-45-29Z
@@ -138,9 +127,9 @@ services:
         mc mb --ignore-existing local/bronze &&
         mc mb --ignore-existing local/silver &&
         mc mb --ignore-existing local/gold &&
-        echo '--- Removing stale legacy buckets (safe: --force only deletes if empty) ---' &&
-        mc rb --force local/ioda-bronze 2>/dev/null && echo 'Removed ioda-bronze' || echo 'ioda-bronze not present or not empty, skipping' &&
-        mc rb --force local/ioda-silver 2>/dev/null && echo 'Removed ioda-silver' || echo 'ioda-silver not present or not empty, skipping' &&
+        echo '--- Removing stale legacy buckets ---' &&
+        mc rb --force local/ioda-bronze 2>/dev/null && echo 'Removed ioda-bronze' || echo 'ioda-bronze: not present or not empty, skipping' &&
+        mc rb --force local/ioda-silver 2>/dev/null && echo 'Removed ioda-silver' || echo 'ioda-silver: not present or not empty, skipping' &&
         echo '--- Current bucket list ---' &&
         mc ls local/
       "
@@ -150,9 +139,13 @@ services:
   # -------------------------------------------------------------------------
   # IODA Bronze Ingester
   # -------------------------------------------------------------------------
+  # Polls IODA REST API every POLL_INTERVAL_SECONDS. Writes to:
+  #   - Kafka  (raw.ioda.alerts / raw.ioda.events / raw.ioda.signals)
+  #   - MinIO  s3a://bronze/ioda/...
+  # -------------------------------------------------------------------------
   ingester:
     build:
-      context: ./ingester
+      context: ./ingestion/ioda
       dockerfile: Dockerfile
     container_name: ioda-ingester
     restart: unless-stopped
@@ -175,13 +168,17 @@ services:
       ENTITY_CODES: "${ENTITY_CODES:-IT MM IN PK UA RU PS SY IR TR BD NG US DE GB}"
       LOOKBACK_MINUTES: "${LOOKBACK_MINUTES:-20}"
       POLL_INTERVAL_SECONDS: "${POLL_INTERVAL_SECONDS:-900}"
+    volumes:
+      - ./ingestion/ioda:/app
     networks:
       - ioda-net
-    volumes:
-      - ./ingester:/app
 
   # -------------------------------------------------------------------------
   # RIPE Atlas Bronze Ingester (WebSocket streaming)
+  # -------------------------------------------------------------------------
+  # Maintains a persistent WebSocket to RIPE Atlas. Writes to:
+  #   - Kafka  (raw.ripe.ping)
+  #   - MinIO  s3a://bronze/ripe/ping/...
   # -------------------------------------------------------------------------
   ripe-ingester:
     build:
@@ -202,30 +199,29 @@ services:
       MINIO_ROOT_USER: "${MINIO_ROOT_USER}"
       MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD}"
       S3_BUCKET_BRONZE: "bronze"
-    networks:
-      - ioda-net
     volumes:
       - ./ingestion/ripe:/app
+    networks:
+      - ioda-net
 
   # =========================================================================
-  # SILVER LAYER — Batch jobs (on-demand, no profiles, exit when done)
+  # SILVER LAYER — Batch jobs (on-demand, exit when done)
   # =========================================================================
-  # These are intentionally NOT started by 'docker compose up -d'.
-  # They have no 'restart' policy, so they run once and stop.
-  # Invoke with:
-  #   docker compose run --rm --no-deps spark-silver-ioda [--start YYYY-MM-DD] [--end YYYY-MM-DD]
-  #   docker compose run --rm --no-deps spark-silver-ripe  [--start YYYY-MM-DD] [--end YYYY-MM-DD]
+  # Read:  s3a://bronze/...  (MinIO)
+  # Write: s3a://silver/...  (MinIO)
   #
-  # --no-deps: skip starting depends_on services (minio and kafka are already up)
+  # entrypoint.sh in ./spark-jobs/ pre-creates Ivy cache dirs as the spark
+  # user before calling spark-submit, fixing the root-owned volume write error.
   #
-  # The --packages list is passed as a single comma-separated string (no spaces,
-  # no line breaks) because spark-submit does not accept whitespace in the value.
+  # Invoke:
+  #   docker compose run --rm --no-deps spark-silver-ioda
+  #   docker compose run --rm --no-deps spark-silver-ioda --start 2026-05-28 --end 2026-06-04
+  #   docker compose run --rm --no-deps spark-silver-ripe  --start 2026-05-28 --end 2026-06-04
   # =========================================================================
 
   spark-silver-ioda:
     image: apache/spark:3.5.1
     container_name: spark-silver-ioda
-    # No restart policy — runs once and exits
     depends_on:
       minio-init:
         condition: service_completed_successfully
@@ -236,11 +232,8 @@ services:
       S3_BUCKET_BRONZE: "bronze"
       S3_BUCKET_SILVER: "silver"
     volumes:
-      - ./spark:/opt/spark-job
-      # Ivy cache persisted in a named volume so JARs are only downloaded once.
+      - ./spark-jobs:/opt/spark-job
       - spark-ivy-cache:/opt/spark/.ivy2
-    # The wrapper script creates .ivy2/cache/ as the spark user before
-    # calling spark-submit, fixing the root-owned volume write error.
     entrypoint: ["/opt/spark-job/entrypoint.sh"]
     command:
       - --master
@@ -266,7 +259,6 @@ services:
       - --conf
       - spark.sql.files.ignoreMissingFiles=true
       - /opt/spark-job/silver_ioda.py
-    # Extra args appended by: docker compose run --rm --no-deps spark-silver-ioda --start 2026-06-01
     networks:
       - ioda-net
 
@@ -283,7 +275,7 @@ services:
       S3_BUCKET_BRONZE: "bronze"
       S3_BUCKET_SILVER: "silver"
     volumes:
-      - ./spark:/opt/spark-job
+      - ./spark-jobs:/opt/spark-job
       - spark-ivy-cache:/opt/spark/.ivy2
     entrypoint: ["/opt/spark-job/entrypoint.sh"]
     command:
@@ -316,11 +308,8 @@ services:
   # =========================================================================
   # SILVER LAYER — Structured Streaming (always-on, live Kafka path)
   # =========================================================================
-  # Reads from Kafka topics starting at 'latest' — processes new messages
-  # as they arrive from the Bronze ingesters.
-  # This does NOT backfill historical data; use the batch jobs above for that.
-  #
-  # Checkpoints in silver/_checkpoints/ persist Kafka offsets across restarts.
+  # Consumes Kafka topics from the Bronze ingesters.
+  # Checkpoints in silver/_checkpoints/ persist offsets across restarts.
   # =========================================================================
   spark-silver-stream:
     image: apache/spark:3.5.1
@@ -340,7 +329,7 @@ services:
       S3_BUCKET_SILVER:        "silver"
       MICRO_BATCH_INTERVAL:    "${MICRO_BATCH_INTERVAL:-2 minutes}"
     volumes:
-      - ./spark:/opt/spark-job
+      - ./spark-jobs:/opt/spark-job
       - spark-ivy-cache:/opt/spark/.ivy2
     entrypoint: ["/opt/spark-job/entrypoint.sh"]
     command:
@@ -378,9 +367,6 @@ volumes:
     driver: local
   minio-data:
     driver: local
-  # Shared Ivy cache for all Spark containers.
-  # Avoids re-downloading --packages JARs on every container restart.
-  # Mounted at /opt/spark/.ivy2 which the spark user owns inside apache/spark.
   spark-ivy-cache:
     driver: local
 

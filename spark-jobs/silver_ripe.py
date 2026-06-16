@@ -1,43 +1,20 @@
 """
 silver_ripe.py — RIPE Atlas Silver Layer Batch Job
 ====================================================
-Reads raw NDJSON.GZ files from the Bronze MinIO layer (RIPE Atlas source),
-applies schema normalisation, firmware-version-aware parsing, RTT extraction,
-PII anonymisation (no raw probe IPs in Silver), and writes columnar Parquet
-files to the Silver MinIO layer.
+Reads raw NDJSON.GZ files from the Bronze MinIO bucket (s3a://bronze/ripe/...),
+applies firmware-version-aware RTT extraction, packet-loss calculation,
+ICMP rate-limit detection, and SHA-256 probe ID anonymisation, then writes
+columnar Parquet to the Silver MinIO bucket (s3a://silver/ripe/...).
 
 Bronze layout consumed:
-  bronze/ripe/ping/year=YYYY/month=MM/day=DD/measurement_<msm_id>_<ts>.ndjson.gz
+  s3a://bronze/ripe/ping/year=YYYY/month=MM/day=DD/measurement_<msm_id>_<ts>.ndjson.gz
 
 Silver layout produced:
-  silver/ripe/ping/year=YYYY/month=MM/day=DD/part-*.parquet
+  s3a://silver/ripe/ping/year=YYYY/month=MM/day=DD/part-*.parquet
 
-Schema notes (RIPE Atlas firmware quirks handled here):
-  - Firmware < 5000: RTTs are in top-level avg/min/max fields (floats).
-  - Firmware >= 5000: RTTs can be in a nested 'result' array. The 'mver' field
-    appears. Error objects replace missing fields.
-  - packet_loss is computed as: 1 - (rcvd / sent), clipped to [0, 1].
-  - ICMP rate-limit flag: when avg is null but sent > 0, we set icmp_filtered=true.
-    This is used by the Gold anomaly scorer to down-weight false positives.
-  - country_code is added by the ingester from probe_mapping — it is preserved
-    and used as the primary partition key.
-
-PII / GDPR compliance:
-  - prb_id (probe ID) is ONE-WAY hashed with SHA-256 before writing to Silver.
-    The hash preserves uniqueness for aggregation without exposing the identity
-    of the volunteer hosting the probe.
-  - src_addr (source IP) is DROPPED entirely — we only need the country_code.
-
-Usage:
-    spark-submit \\
-        --master local[*] \\
-        --packages org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262 \\
-        --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \\
-        --conf spark.hadoop.fs.s3a.access.key=admin \\
-        --conf spark.hadoop.fs.s3a.secret.key=password123 \\
-        --conf spark.hadoop.fs.s3a.path.style.access=true \\
-        --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \\
-        spark/silver_ripe.py [--start 2026-06-01] [--end 2026-06-15]
+Usage (via docker compose):
+    docker compose run --rm --no-deps spark-silver-ripe
+    docker compose run --rm --no-deps spark-silver-ripe --start 2026-05-28 --end 2026-06-04
 """
 
 from __future__ import annotations

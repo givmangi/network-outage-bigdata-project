@@ -1,36 +1,29 @@
 """
 silver_ioda.py — IODA Silver Layer Batch Job
 =============================================
-Reads raw NDJSON.GZ files from the Bronze MinIO layer (IODA source),
-applies schema normalisation, type casting, deduplication, and IP anonymisation,
-then writes columnar Parquet files to the Silver MinIO layer.
+Reads raw NDJSON.GZ files from the Bronze MinIO bucket (s3a://bronze/ioda/...),
+applies schema normalisation, type casting, and deduplication, then writes
+columnar Parquet files to the Silver MinIO bucket (s3a://silver/ioda/...).
 
 Bronze layout consumed:
-  bronze/ioda/alerts/year=YYYY/month=MM/day=DD/<entity_type>_<code>_<datasource>.ndjson.gz
-  bronze/ioda/events/year=YYYY/month=MM/day=DD/<entity_type>_<code>.ndjson.gz
-  bronze/ioda/signals/year=YYYY/month=MM/day=DD/<entity_type>_<code>_<datasource>.ndjson.gz
+  s3a://bronze/ioda/alerts/year=YYYY/month=MM/day=DD/<entity_type>_<code>_<datasource>.ndjson.gz
+  s3a://bronze/ioda/events/year=YYYY/month=MM/day=DD/<entity_type>_<code>.ndjson.gz
+  s3a://bronze/ioda/signals/year=YYYY/month=MM/day=DD/<entity_type>_<code>_<datasource>.ndjson.gz
 
 Silver layout produced:
-  silver/ioda/alerts/year=YYYY/month=MM/day=DD/part-*.parquet
-  silver/ioda/events/year=YYYY/month=MM/day=DD/part-*.parquet
-  silver/ioda/signals/year=YYYY/month=MM/day=DD/part-*.parquet
+  s3a://silver/ioda/alerts/year=YYYY/month=MM/day=DD/part-*.parquet
+  s3a://silver/ioda/events/year=YYYY/month=MM/day=DD/part-*.parquet
+  s3a://silver/ioda/signals/year=YYYY/month=MM/day=DD/part-*.parquet
 
 Design principles:
-  - Schema-on-read: Spark infers JSON schema; we cast and rename to canonical names.
+  - Schema-on-read: explicit schemas prevent silent drift if IODA changes field types.
   - Idempotent: output is overwritten by partition — re-running the same day is safe.
-  - PII minimisation: no raw IP addresses survive into Silver (GDPR compliance).
   - Partition pruning: output partitioned by (year, month, day) matching the Gold layer.
 
-Usage:
-    spark-submit \\
-        --master local[*] \\
-        --packages org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262 \\
-        --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \\
-        --conf spark.hadoop.fs.s3a.access.key=admin \\
-        --conf spark.hadoop.fs.s3a.secret.key=password123 \\
-        --conf spark.hadoop.fs.s3a.path.style.access=true \\
-        --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \\
-        spark/silver_ioda.py [--start 2026-06-01] [--end 2026-06-15]
+Usage (via docker compose):
+    docker compose run --rm --no-deps spark-silver-ioda
+    docker compose run --rm --no-deps spark-silver-ioda --start 2026-05-28 --end 2026-06-04
+    docker compose run --rm --no-deps spark-silver-ioda --datasets alerts events
 """
 
 from __future__ import annotations
@@ -138,10 +131,7 @@ def build_spark(app_name: str = "silver_ioda") -> SparkSession:
 # ---------------------------------------------------------------------------
 
 def _bronze_glob(layer: str, date_partition: str) -> str:
-    """
-    Build the S3A glob pattern that covers all entity files for a given
-    bronze sub-layer (alerts / events / signals) and date partition.
-    """
+    """Build the S3A glob pattern for a bronze sub-layer and date partition."""
     return f"s3a://{BRONZE_BUCKET}/ioda/{layer}/{date_partition}/*.ndjson.gz"
 
 
