@@ -70,7 +70,11 @@ def run_ioda_backfill(country_code: str, days: int, dry_run: bool) -> bool:
 
 def run_ripe_backfill(days: int, dry_run: bool) -> bool:
     """Run the RIPE historical backfill container for all priority countries."""
-    # RIPE script automatically handles all target countries via probe_mapping.json
+    # Unlike IODA, RIPE has no per-country API parameter — root server ping
+    # measurements are global by nature. Country scoping happens upstream,
+    # via ripe_recon.py filtering probe IDs into ripe_probe_mapping.json
+    # (built from TARGET_COUNTRIES). This function just runs the container
+    # once; no per-country loop is needed or possible here.
     cmd = [
         "docker", "compose", "run", "--rm",
         "ripe-ingester",
