@@ -356,10 +356,63 @@ def process_signals(spark: SparkSession, date_partition: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Date window helpers
+# Partition discovery — uses the Hadoop FileSystem API already in the JVM
 # ---------------------------------------------------------------------------
 
-def _date_partitions(start: datetime, end: datetime) -> list[str]:
+def _discover_partitions(spark: "SparkSession", layer: str) -> list[str]:
+    """
+    List every year=/month=/day= partition that actually exists under
+    s3a://<BRONZE_BUCKET>/ioda/<layer>/ by walking the S3 prefix tree
+    via the Hadoop FileSystem API (available through spark._jvm).
+
+    This avoids needing boto3, which is not installed in the apache/spark
+    image's Python environment. The S3A connector is already loaded as a
+    JAR (via --packages), so its Java classes are accessible through the JVM.
+
+    Returns a sorted list of Hive-style partition strings, e.g.:
+      ['year=2026/month=05/day=28', 'year=2026/month=05/day=29', ...]
+    """
+    jvm  = spark._jvm
+    jsc  = spark._jsc.sc()
+    conf = jsc.hadoopConfiguration()
+
+    Path = jvm.org.apache.hadoop.fs.Path
+    base = f"s3a://{BRONZE_BUCKET}/ioda/{layer}"
+    base_path = Path(base)
+    fs = base_path.getFileSystem(conf)
+
+    day_partitions: set[str] = set()
+
+    try:
+        # Walk year= directories
+        for year_status in fs.listStatus(base_path):
+            if not year_status.isDirectory():
+                continue
+            year_path = year_status.getPath()
+            # Walk month= directories
+            for month_status in fs.listStatus(year_path):
+                if not month_status.isDirectory():
+                    continue
+                month_path = month_status.getPath()
+                # Walk day= directories
+                for day_status in fs.listStatus(month_path):
+                    if not day_status.isDirectory():
+                        continue
+                    day_path = day_status.getPath()
+                    # Build partition string: year=YYYY/month=MM/day=DD
+                    partition = (
+                        f"{year_path.getName()}/"
+                        f"{month_path.getName()}/"
+                        f"{day_path.getName()}"
+                    )
+                    day_partitions.add(partition)
+    except Exception as exc:
+        log.warning("Could not list s3a://%s/ioda/%s/: %s", BRONZE_BUCKET, layer, exc)
+
+    return sorted(day_partitions)
+
+
+def _date_partitions_from_range(start: datetime, end: datetime) -> list[str]:
     """Return Hive-style partition strings for each day in [start, end)."""
     parts = []
     cursor = start.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -381,34 +434,57 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
-    today     = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-    parser.add_argument("--start", default=yesterday,
-                        help="Start date inclusive (YYYY-MM-DD). Default: yesterday.")
-    parser.add_argument("--end",   default=today,
-                        help="End date exclusive (YYYY-MM-DD). Default: today.")
-    parser.add_argument("--datasets", nargs="+",
-                        choices=["alerts", "events", "signals"],
-                        default=["alerts", "events", "signals"],
-                        help="Which IODA datasets to process. Default: all three.")
+    parser.add_argument(
+        "--start", default=None,
+        help="Start date inclusive (YYYY-MM-DD). Omit to auto-discover all bronze partitions.",
+    )
+    parser.add_argument(
+        "--end", default=None,
+        help="End date exclusive (YYYY-MM-DD). Omit to auto-discover all bronze partitions.",
+    )
+    parser.add_argument(
+        "--datasets", nargs="+",
+        choices=["alerts", "events", "signals"],
+        default=["alerts", "events", "signals"],
+        help="Which IODA datasets to process. Default: all three.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
 
-    start = datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    end   = datetime.strptime(args.end,   "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    # Spark must be running before we can use the Hadoop FS API for discovery
+    spark = build_spark()
 
-    if start >= end:
-        log.error("--start must be before --end")
-        sys.exit(1)
+    # Build partition list: auto-discover from bucket, or use explicit range
+    if args.start is None and args.end is None:
+        log.info("No date range specified — auto-discovering partitions from s3a://%s/ioda/", BRONZE_BUCKET)
+        reference_layer = args.datasets[0]
+        partitions = _discover_partitions(spark, reference_layer)
+        if not partitions:
+            log.error("No bronze partitions found in s3a://%s/ioda/%s/. "
+                      "Has the ingester written any data yet?", BRONZE_BUCKET, reference_layer)
+            spark.stop()
+            sys.exit(1)
+        log.info("Discovered %d partition(s): %s … %s",
+                 len(partitions), partitions[0], partitions[-1])
+    else:
+        if args.start is None or args.end is None:
+            log.error("Provide both --start and --end, or neither (auto-discover).")
+            spark.stop()
+            sys.exit(1)
+        start = datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        end   = datetime.strptime(args.end,   "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        if start >= end:
+            log.error("--start must be before --end")
+            spark.stop()
+            sys.exit(1)
+        partitions = _date_partitions_from_range(start, end)
+        log.info("Date range specified: %d partition(s)", len(partitions))
 
-    partitions = _date_partitions(start, end)
     log.info("IODA Silver job: %d day(s) × datasets=%s", len(partitions), args.datasets)
 
-    spark = build_spark()
     totals: dict[str, int] = {}
 
     for date_part in partitions:

@@ -233,29 +233,11 @@ services:
       S3_BUCKET_SILVER: "silver"
     volumes:
       - ./spark-jobs:/opt/spark-job
-    entrypoint: ["/opt/spark-job/entrypoint.sh"]
-    command:
-      - --master
-      - local[*]
-      - --packages
-      - "org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262"
-      - --conf
-      - spark.hadoop.fs.s3a.endpoint=http://minio:9000
-      - --conf
-      - spark.hadoop.fs.s3a.access.key=${MINIO_ROOT_USER}
-      - --conf
-      - spark.hadoop.fs.s3a.secret.key=${MINIO_ROOT_PASSWORD}
-      - --conf
-      - spark.hadoop.fs.s3a.path.style.access=true
-      - --conf
-      - spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem
-      - --conf
-      - spark.hadoop.fs.s3a.connection.ssl.enabled=false
-      - --conf
-      - spark.sql.shuffle.partitions=8
-      - --conf
-      - spark.sql.files.ignoreMissingFiles=true
-      - /opt/spark-job/silver_ioda.py
+    # python submit.py is the entrypoint; 'ioda' selects the job.
+    # Extra args from 'docker compose run spark-silver-ioda --start X --end Y'
+    # replace command: and are forwarded to silver_ioda.py by submit.py.
+    entrypoint: ["python3", "/opt/spark-job/submit.py", "ioda"]
+    command: []
     networks:
       - ioda-net
 
@@ -273,29 +255,8 @@ services:
       S3_BUCKET_SILVER: "silver"
     volumes:
       - ./spark-jobs:/opt/spark-job
-    entrypoint: ["/opt/spark-job/entrypoint.sh"]
-    command:
-      - --master
-      - local[*]
-      - --packages
-      - "org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262"
-      - --conf
-      - spark.hadoop.fs.s3a.endpoint=http://minio:9000
-      - --conf
-      - spark.hadoop.fs.s3a.access.key=${MINIO_ROOT_USER}
-      - --conf
-      - spark.hadoop.fs.s3a.secret.key=${MINIO_ROOT_PASSWORD}
-      - --conf
-      - spark.hadoop.fs.s3a.path.style.access=true
-      - --conf
-      - spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem
-      - --conf
-      - spark.hadoop.fs.s3a.connection.ssl.enabled=false
-      - --conf
-      - spark.sql.shuffle.partitions=8
-      - --conf
-      - spark.sql.files.ignoreMissingFiles=true
-      - /opt/spark-job/silver_ripe.py
+    entrypoint: ["python3", "/opt/spark-job/submit.py", "ripe"]
+    command: []
     networks:
       - ioda-net
 
@@ -324,29 +285,7 @@ services:
       MICRO_BATCH_INTERVAL:    "${MICRO_BATCH_INTERVAL:-2 minutes}"
     volumes:
       - ./spark-jobs:/opt/spark-job
-    entrypoint: ["/opt/spark-job/entrypoint.sh"]
-    command:
-      - --master
-      - local[*]
-      - --packages
-      - "org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1"
-      - --conf
-      - spark.hadoop.fs.s3a.endpoint=http://minio:9000
-      - --conf
-      - spark.hadoop.fs.s3a.access.key=${MINIO_ROOT_USER}
-      - --conf
-      - spark.hadoop.fs.s3a.secret.key=${MINIO_ROOT_PASSWORD}
-      - --conf
-      - spark.hadoop.fs.s3a.path.style.access=true
-      - --conf
-      - spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem
-      - --conf
-      - spark.hadoop.fs.s3a.connection.ssl.enabled=false
-      - --conf
-      - spark.sql.shuffle.partitions=8
-      - --conf
-      - spark.streaming.stopGracefullyOnShutdown=true
-      - /opt/spark-job/silver_streaming.py
+    entrypoint: ["python3", "/opt/spark-job/submit.py", "stream"]
     networks:
       - ioda-net
 

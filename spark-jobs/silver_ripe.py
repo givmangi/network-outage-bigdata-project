@@ -305,10 +305,50 @@ def process_ping(spark: SparkSession, date_partition: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Date window helpers
+# Partition discovery — uses the Hadoop FileSystem API already in the JVM
 # ---------------------------------------------------------------------------
 
-def _date_partitions(start: datetime, end: datetime) -> list[str]:
+def _discover_partitions(spark: "SparkSession") -> list[str]:
+    """
+    List every year=/month=/day= partition under s3a://bronze/ripe/ping/
+    via the Hadoop FileSystem API (spark._jvm). No boto3 required.
+    """
+    jvm  = spark._jvm
+    jsc  = spark._jsc.sc()
+    conf = jsc.hadoopConfiguration()
+
+    Path = jvm.org.apache.hadoop.fs.Path
+    base = f"s3a://{BRONZE_BUCKET}/ripe/ping"
+    base_path = Path(base)
+    fs = base_path.getFileSystem(conf)
+
+    day_partitions: set[str] = set()
+    try:
+        for year_status in fs.listStatus(base_path):
+            if not year_status.isDirectory():
+                continue
+            year_path = year_status.getPath()
+            for month_status in fs.listStatus(year_path):
+                if not month_status.isDirectory():
+                    continue
+                month_path = month_status.getPath()
+                for day_status in fs.listStatus(month_path):
+                    if not day_status.isDirectory():
+                        continue
+                    day_path = day_status.getPath()
+                    partition = (
+                        f"{year_path.getName()}/"
+                        f"{month_path.getName()}/"
+                        f"{day_path.getName()}"
+                    )
+                    day_partitions.add(partition)
+    except Exception as exc:
+        log.warning("Could not list s3a://%s/ripe/ping/: %s", BRONZE_BUCKET, exc)
+
+    return sorted(day_partitions)
+
+
+def _date_partitions_from_range(start: datetime, end: datetime) -> list[str]:
     parts = []
     cursor = start.replace(hour=0, minute=0, second=0, microsecond=0)
     while cursor < end:
@@ -325,27 +365,47 @@ def _date_partitions(start: datetime, end: datetime) -> list[str]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="RIPE Silver Layer Batch Job")
-    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
-    today     = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    parser.add_argument("--start", default=yesterday)
-    parser.add_argument("--end",   default=today)
+    parser.add_argument(
+        "--start", default=None,
+        help="Start date inclusive (YYYY-MM-DD). Omit to auto-discover all bronze partitions.",
+    )
+    parser.add_argument(
+        "--end", default=None,
+        help="End date exclusive (YYYY-MM-DD). Omit to auto-discover all bronze partitions.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
 
-    start = datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    end   = datetime.strptime(args.end,   "%Y-%m-%d").replace(tzinfo=timezone.utc)
-
-    if start >= end:
-        log.error("--start must be before --end")
-        sys.exit(1)
-
-    partitions = _date_partitions(start, end)
-    log.info("RIPE Silver job: %d day(s)", len(partitions))
-
+    # Spark must be running before we can use the Hadoop FS API for discovery
     spark = build_spark()
+
+    if args.start is None and args.end is None:
+        log.info("No date range specified — auto-discovering partitions from s3a://%s/ripe/ping/", BRONZE_BUCKET)
+        partitions = _discover_partitions(spark)
+        if not partitions:
+            log.warning("No RIPE bronze partitions found — has ripe-ingester written any data yet?")
+            spark.stop()
+            return
+        log.info("Discovered %d partition(s): %s … %s",
+                 len(partitions), partitions[0], partitions[-1])
+    else:
+        if args.start is None or args.end is None:
+            log.error("Provide both --start and --end, or neither (auto-discover).")
+            spark.stop()
+            sys.exit(1)
+        start = datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        end   = datetime.strptime(args.end,   "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        if start >= end:
+            log.error("--start must be before --end")
+            spark.stop()
+            sys.exit(1)
+        partitions = _date_partitions_from_range(start, end)
+        log.info("Date range specified: %d partition(s)", len(partitions))
+
+    log.info("RIPE Silver job: %d day(s)", len(partitions))
     total = 0
 
     for date_part in partitions:
