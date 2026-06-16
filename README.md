@@ -41,11 +41,6 @@ and dashboard are in progress.
 
 ```
 network-outage-bigdata-project/
-├── config/
-│   ├── kafka/                       # (empty — placeholder for future Kafka config)
-│   └── minio/
-│       ├── init_minio.py
-│       └── Dockerfile
 ├── ingestion/
 │   ├── ioda/                        # IODA data source
 │   │   ├── starting_pipe.py         # Docker ingestion logic (Kafka + MinIO)
