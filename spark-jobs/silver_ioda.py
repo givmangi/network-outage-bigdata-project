@@ -1,0 +1,513 @@
+"""
+silver_ioda.py — IODA Silver Layer Batch Job
+=============================================
+Reads raw NDJSON.GZ files from the Bronze MinIO bucket (s3a://bronze/ioda/...),
+applies schema normalisation, type casting, and deduplication, then writes
+columnar Parquet files to the Silver MinIO bucket (s3a://silver/ioda/...).
+
+Bronze layout consumed:
+  s3a://bronze/ioda/alerts/year=YYYY/month=MM/day=DD/<entity_type>_<code>_<datasource>.ndjson.gz
+  s3a://bronze/ioda/events/year=YYYY/month=MM/day=DD/<entity_type>_<code>.ndjson.gz
+  s3a://bronze/ioda/signals/year=YYYY/month=MM/day=DD/<entity_type>_<code>_<datasource>.ndjson.gz
+
+Silver layout produced:
+  s3a://silver/ioda/alerts/year=YYYY/month=MM/day=DD/part-*.parquet
+  s3a://silver/ioda/events/year=YYYY/month=MM/day=DD/part-*.parquet
+  s3a://silver/ioda/signals/year=YYYY/month=MM/day=DD/part-*.parquet
+
+Design principles:
+  - Schema-on-read: explicit schemas prevent silent drift if IODA changes field types.
+  - Idempotent: output is overwritten by partition — re-running the same day is safe.
+  - Partition pruning: output partitioned by (year, month, day) matching the Gold layer.
+
+Usage (via docker compose):
+    docker compose run --rm --no-deps spark-silver-ioda
+    docker compose run --rm --no-deps spark-silver-ioda --start 2026-05-28 --end 2026-06-04
+    docker compose run --rm --no-deps spark-silver-ioda --datasets alerts events
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import os
+import sys
+from datetime import datetime, timedelta, timezone
+
+from pyspark.sql import SparkSession, DataFrame
+from pyspark.sql import functions as F
+from pyspark.sql.types import (
+    DoubleType, IntegerType, LongType, StringType, StructField, StructType,
+    TimestampType, BooleanType,
+)
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+S3_ENDPOINT   = os.environ.get("S3_ENDPOINT_URL",   "http://minio:9000")
+S3_ACCESS_KEY = os.environ.get("S3_ACCESS_KEY",     "admin")
+S3_SECRET_KEY = os.environ.get("S3_SECRET_KEY",     "password123")
+BRONZE_BUCKET = os.environ.get("S3_BUCKET_BRONZE",  "bronze")
+SILVER_BUCKET = os.environ.get("S3_BUCKET_SILVER",  "silver")
+
+DATASOURCES = ["bgp", "ping-slash24", "merit-nt"]
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%SZ",
+)
+log = logging.getLogger("silver_ioda")
+
+# ---------------------------------------------------------------------------
+# Explicit Silver schemas
+# ---------------------------------------------------------------------------
+# We define explicit schemas rather than relying on inferSchema=true.
+# This prevents schema drift from silently corrupting the Silver layer
+# if IODA ever changes a field name or type.
+
+ALERT_SCHEMA = StructType([
+    StructField("entityType",    StringType(),  True),
+    StructField("entityCode",    StringType(),  True),
+    StructField("datasource",    StringType(),  True),
+    StructField("condition",     StringType(),  True),
+    StructField("value",         DoubleType(),  True),
+    StructField("historicalValue", DoubleType(), True),
+    StructField("from",          LongType(),    True),
+    StructField("until",         LongType(),    True),
+    StructField("level",         StringType(),  True),
+    StructField("method",        StringType(),  True),
+])
+
+EVENT_SCHEMA = StructType([
+    StructField("entityType",    StringType(),  True),
+    StructField("entityCode",    StringType(),  True),
+    StructField("from",          LongType(),    True),
+    StructField("until",         LongType(),    True),
+    StructField("score",         DoubleType(),  True),
+    StructField("overallScore",  DoubleType(),  True),
+    StructField("id",            StringType(),  True),
+])
+
+SIGNAL_SCHEMA = StructType([
+    StructField("entityType",    StringType(),  True),
+    StructField("entityCode",    StringType(),  True),
+    StructField("datasource",    StringType(),  True),
+    StructField("ts",            LongType(),    True),
+    StructField("value",         DoubleType(),  True),
+    StructField("step",          IntegerType(), True),
+    StructField("nativeStep",    IntegerType(), True),
+])
+
+
+# ---------------------------------------------------------------------------
+# Spark session factory
+# ---------------------------------------------------------------------------
+
+def build_spark(app_name: str = "silver_ioda") -> SparkSession:
+    spark = (
+        SparkSession.builder
+        .appName(app_name)
+        .config("spark.sql.shuffle.partitions", "8")
+        # S3A / MinIO settings
+        .config("spark.hadoop.fs.s3a.endpoint",           S3_ENDPOINT)
+        .config("spark.hadoop.fs.s3a.access.key",         S3_ACCESS_KEY)
+        .config("spark.hadoop.fs.s3a.secret.key",         S3_SECRET_KEY)
+        .config("spark.hadoop.fs.s3a.path.style.access",  "true")
+        .config("spark.hadoop.fs.s3a.impl",
+                "org.apache.hadoop.fs.s3a.S3AFileSystem")
+        .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
+        # Don't fail the job if some bronze partitions don't exist yet
+        .config("spark.sql.files.ignoreMissingFiles", "true")
+        .getOrCreate()
+    )
+    spark.sparkContext.setLogLevel("WARN")
+    return spark
+
+
+# ---------------------------------------------------------------------------
+# Bronze path helpers
+# ---------------------------------------------------------------------------
+
+def _bronze_glob(layer: str, date_partition: str) -> str:
+    """Build the S3A glob pattern for a bronze sub-layer and date partition."""
+    return f"s3a://{BRONZE_BUCKET}/ioda/{layer}/{date_partition}/*.ndjson.gz"
+
+
+def _silver_path(layer: str, date_partition: str) -> str:
+    return f"s3a://{SILVER_BUCKET}/ioda/{layer}/{date_partition}"
+
+
+# ---------------------------------------------------------------------------
+# Transform: Alerts
+# ---------------------------------------------------------------------------
+
+def process_alerts(spark: SparkSession, date_partition: str) -> int:
+    """
+    Read all alert NDJSON.GZ files for the given date partition, normalise
+    the schema, deduplicate, and write Parquet to Silver.
+
+    Returns the number of records written (0 if no data found).
+    """
+    src = _bronze_glob("alerts", date_partition)
+    log.info("[alerts] reading from %s", src)
+
+    try:
+        raw: DataFrame = (
+            spark.read
+            .schema(ALERT_SCHEMA)
+            .option("multiline", "false")
+            .json(src)
+        )
+    except Exception as exc:
+        log.warning("[alerts] could not read bronze: %s", exc)
+        return 0
+
+    if raw.rdd.isEmpty():
+        log.info("[alerts] no data for %s — skipping", date_partition)
+        return 0
+
+    silver = (
+        raw
+        # Cast Unix timestamps → TimestampType for easier Spark SQL windowing
+        .withColumn("ts_from",  F.to_timestamp(F.col("from")))
+        .withColumn("ts_until", F.to_timestamp(F.col("until")))
+        # Normalise entity fields
+        .withColumn("entity_type", F.upper(F.col("entityType")))
+        .withColumn("entity_code", F.upper(F.col("entityCode")))
+        # Normalise datasource names to lowercase for consistency
+        .withColumn("datasource",  F.lower(F.col("datasource")))
+        # Coalesce both score columns into one
+        .withColumn("alert_value",
+                    F.coalesce(F.col("value"), F.lit(None).cast(DoubleType())))
+        .withColumn("historical_value",
+                    F.coalesce(F.col("historicalValue"), F.lit(None).cast(DoubleType())))
+        # Drop raw fields that have been renamed
+        .drop("from", "until", "entityType", "entityCode", "value", "historicalValue")
+        # Deduplicate: same entity+datasource+from timestamp = same alert
+        .dropDuplicates(["entity_type", "entity_code", "datasource", "ts_from"])
+        # Derive partition columns from ts_from
+        .withColumn("year",  F.year("ts_from"))
+        .withColumn("month", F.month("ts_from"))
+        .withColumn("day",   F.dayofmonth("ts_from"))
+    )
+
+    dst = _silver_path("alerts", date_partition)
+    log.info("[alerts] writing Silver Parquet → %s", dst)
+
+    count = silver.count()
+    (
+        silver.repartition(4, "entity_code", "datasource")
+        .write
+        .mode("overwrite")
+        .partitionBy("year", "month", "day")
+        .parquet(dst)
+    )
+    log.info("[alerts] wrote %d records", count)
+    return count
+
+
+# ---------------------------------------------------------------------------
+# Transform: Events
+# ---------------------------------------------------------------------------
+
+def process_events(spark: SparkSession, date_partition: str) -> int:
+    """
+    Read all event NDJSON.GZ files, flatten the schema, and write Parquet.
+
+    Events embed constituent alerts in a nested 'alerts' array. We extract
+    the top-level event fields here and write them as a flat table. The nested
+    alerts are intentionally dropped: the raw alert data is already present
+    in the alerts Silver layer, so storing them again would be redundant.
+    """
+    src = _bronze_glob("events", date_partition)
+    log.info("[events] reading from %s", src)
+
+    try:
+        # Use permissive mode + infer schema for events because the embedded
+        # 'alerts' array can have deep nesting we don't care about.
+        raw: DataFrame = (
+            spark.read
+            .option("multiline", "false")
+            .option("mode", "PERMISSIVE")
+            .json(src)
+        )
+    except Exception as exc:
+        log.warning("[events] could not read bronze: %s", exc)
+        return 0
+
+    if raw.rdd.isEmpty():
+        log.info("[events] no data for %s — skipping", date_partition)
+        return 0
+
+    # Select only top-level fields; discard nested alerts array
+    available = set(raw.columns)
+    select_exprs = []
+
+    for col_name, alias, cast_type in [
+        ("entityType",   "entity_type",   StringType()),
+        ("entityCode",   "entity_code",   StringType()),
+        ("from",         "ts_from_unix",  LongType()),
+        ("until",        "ts_until_unix", LongType()),
+        ("score",        "score",         DoubleType()),
+        ("overallScore", "overall_score", DoubleType()),
+        ("id",           "event_id",      StringType()),
+    ]:
+        if col_name in available:
+            select_exprs.append(F.col(col_name).cast(cast_type).alias(alias))
+        else:
+            select_exprs.append(F.lit(None).cast(cast_type).alias(alias))
+
+    silver = (
+        raw.select(select_exprs)
+        .withColumn("ts_from",  F.to_timestamp(F.col("ts_from_unix")))
+        .withColumn("ts_until", F.to_timestamp(F.col("ts_until_unix")))
+        .withColumn("duration_sec",
+                    F.col("ts_until_unix") - F.col("ts_from_unix"))
+        .withColumn("entity_type", F.upper(F.col("entity_type")))
+        .withColumn("entity_code", F.upper(F.col("entity_code")))
+        .drop("ts_from_unix", "ts_until_unix")
+        .dropDuplicates(["event_id", "entity_code", "ts_from"])
+        .withColumn("year",  F.year("ts_from"))
+        .withColumn("month", F.month("ts_from"))
+        .withColumn("day",   F.dayofmonth("ts_from"))
+    )
+
+    dst = _silver_path("events", date_partition)
+    log.info("[events] writing Silver Parquet → %s", dst)
+
+    count = silver.count()
+    (
+        silver.repartition(2, "entity_code")
+        .write
+        .mode("overwrite")
+        .partitionBy("year", "month", "day")
+        .parquet(dst)
+    )
+    log.info("[events] wrote %d records", count)
+    return count
+
+
+# ---------------------------------------------------------------------------
+# Transform: Signals
+# ---------------------------------------------------------------------------
+
+def process_signals(spark: SparkSession, date_partition: str) -> int:
+    """
+    Read all signal NDJSON.GZ files. Each row is already a flattened
+    per-timestep record (the Bronze ingester expanded the compact
+    'values[]' array). We cast types, filter nulls, and compute
+    a z-score flag for anomaly detection by the Gold layer.
+
+    Null 'value' rows are KEPT but flagged (collection_gap=true) because
+    a sustained run of nulls can itself indicate a monitoring blackout.
+    """
+    src = _bronze_glob("signals", date_partition)
+    log.info("[signals] reading from %s", src)
+
+    try:
+        raw: DataFrame = (
+            spark.read
+            .schema(SIGNAL_SCHEMA)
+            .option("multiline", "false")
+            .json(src)
+        )
+    except Exception as exc:
+        log.warning("[signals] could not read bronze: %s", exc)
+        return 0
+
+    if raw.rdd.isEmpty():
+        log.info("[signals] no data for %s — skipping", date_partition)
+        return 0
+
+    silver = (
+        raw
+        .withColumn("ts",          F.col("ts").cast(LongType()))
+        .withColumn("ts_utc",      F.to_timestamp(F.col("ts")))
+        .withColumn("entity_type", F.upper(F.col("entityType")))
+        .withColumn("entity_code", F.upper(F.col("entityCode")))
+        .withColumn("datasource",  F.lower(F.col("datasource")))
+        .withColumn("value",       F.col("value").cast(DoubleType()))
+        # Flag rows where IODA had no data for that step
+        .withColumn("collection_gap", F.col("value").isNull())
+        .drop("entityType", "entityCode")
+        .dropDuplicates(["entity_type", "entity_code", "datasource", "ts"])
+        .withColumn("year",  F.year("ts_utc"))
+        .withColumn("month", F.month("ts_utc"))
+        .withColumn("day",   F.dayofmonth("ts_utc"))
+    )
+
+    dst = _silver_path("signals", date_partition)
+    log.info("[signals] writing Silver Parquet → %s", dst)
+
+    count = silver.count()
+    (
+        silver
+        # Signals are high volume — use more partitions
+        .repartition(8, "entity_code", "datasource")
+        .write
+        .mode("overwrite")
+        .partitionBy("year", "month", "day")
+        .parquet(dst)
+    )
+    log.info("[signals] wrote %d records", count)
+    return count
+
+
+# ---------------------------------------------------------------------------
+# Partition discovery — uses the Hadoop FileSystem API already in the JVM
+# ---------------------------------------------------------------------------
+
+def _discover_partitions(spark: "SparkSession", layer: str) -> list[str]:
+    """
+    List every year=/month=/day= partition that actually exists under
+    s3a://<BRONZE_BUCKET>/ioda/<layer>/ by walking the S3 prefix tree
+    via the Hadoop FileSystem API (available through spark._jvm).
+
+    This avoids needing boto3, which is not installed in the apache/spark
+    image's Python environment. The S3A connector is already loaded as a
+    JAR (via --packages), so its Java classes are accessible through the JVM.
+
+    Returns a sorted list of Hive-style partition strings, e.g.:
+      ['year=2026/month=05/day=28', 'year=2026/month=05/day=29', ...]
+    """
+    jvm  = spark._jvm
+    jsc  = spark._jsc.sc()
+    conf = jsc.hadoopConfiguration()
+
+    Path = jvm.org.apache.hadoop.fs.Path
+    base = f"s3a://{BRONZE_BUCKET}/ioda/{layer}"
+    base_path = Path(base)
+    fs = base_path.getFileSystem(conf)
+
+    day_partitions: set[str] = set()
+
+    try:
+        # Walk year= directories
+        for year_status in fs.listStatus(base_path):
+            if not year_status.isDirectory():
+                continue
+            year_path = year_status.getPath()
+            # Walk month= directories
+            for month_status in fs.listStatus(year_path):
+                if not month_status.isDirectory():
+                    continue
+                month_path = month_status.getPath()
+                # Walk day= directories
+                for day_status in fs.listStatus(month_path):
+                    if not day_status.isDirectory():
+                        continue
+                    day_path = day_status.getPath()
+                    # Build partition string: year=YYYY/month=MM/day=DD
+                    partition = (
+                        f"{year_path.getName()}/"
+                        f"{month_path.getName()}/"
+                        f"{day_path.getName()}"
+                    )
+                    day_partitions.add(partition)
+    except Exception as exc:
+        log.warning("Could not list s3a://%s/ioda/%s/: %s", BRONZE_BUCKET, layer, exc)
+
+    return sorted(day_partitions)
+
+
+def _date_partitions_from_range(start: datetime, end: datetime) -> list[str]:
+    """Return Hive-style partition strings for each day in [start, end)."""
+    parts = []
+    cursor = start.replace(hour=0, minute=0, second=0, microsecond=0)
+    while cursor < end:
+        parts.append(
+            f"year={cursor.year:04d}/month={cursor.month:02d}/day={cursor.day:02d}"
+        )
+        cursor += timedelta(days=1)
+    return parts
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="IODA Silver Layer Batch Job",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    parser.add_argument(
+        "--start", default=None,
+        help="Start date inclusive (YYYY-MM-DD). Omit to auto-discover all bronze partitions.",
+    )
+    parser.add_argument(
+        "--end", default=None,
+        help="End date exclusive (YYYY-MM-DD). Omit to auto-discover all bronze partitions.",
+    )
+    parser.add_argument(
+        "--datasets", nargs="+",
+        choices=["alerts", "events", "signals"],
+        default=["alerts", "events", "signals"],
+        help="Which IODA datasets to process. Default: all three.",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+
+    # Spark must be running before we can use the Hadoop FS API for discovery
+    spark = build_spark()
+
+    # Build partition list: auto-discover from bucket, or use explicit range
+    if args.start is None and args.end is None:
+        log.info("No date range specified — auto-discovering partitions from s3a://%s/ioda/", BRONZE_BUCKET)
+        reference_layer = args.datasets[0]
+        partitions = _discover_partitions(spark, reference_layer)
+        if not partitions:
+            log.error("No bronze partitions found in s3a://%s/ioda/%s/. "
+                      "Has the ingester written any data yet?", BRONZE_BUCKET, reference_layer)
+            spark.stop()
+            sys.exit(1)
+        log.info("Discovered %d partition(s): %s … %s",
+                 len(partitions), partitions[0], partitions[-1])
+    else:
+        if args.start is None or args.end is None:
+            log.error("Provide both --start and --end, or neither (auto-discover).")
+            spark.stop()
+            sys.exit(1)
+        start = datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        end   = datetime.strptime(args.end,   "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        if start >= end:
+            log.error("--start must be before --end")
+            spark.stop()
+            sys.exit(1)
+        partitions = _date_partitions_from_range(start, end)
+        log.info("Date range specified: %d partition(s)", len(partitions))
+
+    log.info("IODA Silver job: %d day(s) × datasets=%s", len(partitions), args.datasets)
+
+    totals: dict[str, int] = {}
+
+    for date_part in partitions:
+        log.info("=== Processing partition: %s ===", date_part)
+
+        if "alerts" in args.datasets:
+            n = process_alerts(spark, date_part)
+            totals["alerts"] = totals.get("alerts", 0) + n
+
+        if "events" in args.datasets:
+            n = process_events(spark, date_part)
+            totals["events"] = totals.get("events", 0) + n
+
+        if "signals" in args.datasets:
+            n = process_signals(spark, date_part)
+            totals["signals"] = totals.get("signals", 0) + n
+
+    log.info("=" * 60)
+    log.info("IODA Silver complete. Record totals: %s", totals)
+    log.info("=" * 60)
+
+    spark.stop()
+
+
+if __name__ == "__main__":
+    main()

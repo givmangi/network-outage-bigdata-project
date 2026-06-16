@@ -1,88 +1,54 @@
 ---
-# IODA Bronze Layer Stack
-# ========================
-# Services:
-#   kafka       - Message broker (KRaft mode, no Zookeeper needed)
-#   kafka-ui    - Web UI to inspect topics and messages
-#   minio       - S3-compatible object storage (the Bronze data lake)
-#   minio-init  - One-shot container that creates the bucket on first boot
-#   ingester    - Python container that polls IODA and writes to Kafka + MinIO
+# Internet Outage Intelligence Stack
+# ====================================
+# Directory layout (from project root):
+#   ./ingestion/ioda/   - IODA ingester source + Dockerfile
+#   ./ingestion/ripe/   - RIPE Atlas ingester source + Dockerfile
+#   ./spark-jobs/       - PySpark silver layer scripts + entrypoint.sh
 #
-# Quick start:
-#   cp .env.example .env        # then edit credentials
-#   docker compose up -d
-#   docker compose logs -f ingester
+# Data flow:
+#   IODA API   -> ingester        -> Kafka (raw.ioda.*) + MinIO (bronze/ioda/...)
+#   RIPE WS    -> ripe-ingester   -> Kafka (raw.ripe.ping) + MinIO (bronze/ripe/...)
+#   MinIO bronze + Kafka -> Spark -> MinIO (silver/...)
 #
-# To trigger a manual backfill:
-#   docker compose run --rm ingester \
-#       python run_loop.py backfill 7
+# Services (always-on):
+#   kafka, kafka-ui, minio, minio-init, ingester, ripe-ingester, spark-silver-stream
+#
+# On-demand batch Silver jobs:
+#   docker compose run --rm --no-deps spark-silver-ioda [--start YYYY-MM-DD] [--end YYYY-MM-DD]
+#   docker compose run --rm --no-deps spark-silver-ripe  [--start YYYY-MM-DD] [--end YYYY-MM-DD]
 
 services:
 
   # -------------------------------------------------------------------------
   # Kafka (KRaft mode — no Zookeeper)
   # -------------------------------------------------------------------------
-  # KRaft is Kafka's built-in consensus protocol, stable since Kafka 3.3.
-  # It removes the Zookeeper dependency entirely, halving the number of
-  # containers needed and eliminating an entire class of split-brain failure.
-  #
-  # We configure a single-broker setup. For an academic project this is
-  # perfectly adequate: a single broker still gives you durable log storage,
-  # consumer group coordination, and the decoupling semantics we need.
-  # Scaling to 3 brokers later only requires changing KAFKA_NODE_ID and
-  # the CONTROLLER_QUORUM_VOTERS list.
-  #
-  # Ports:
-  #   9092  - accessible from the host (for debugging with kafkacat / kcat)
-  #   29092 - internal listener used by other containers in the same network
-  # -------------------------------------------------------------------------
   kafka:
     image: confluentinc/cp-kafka:7.6.1
-    container_name: kafka
+    container_name: ioda-kafka
     restart: unless-stopped
     ports:
       - "9092:9092"
     environment:
-      # KRaft: this broker is both controller and broker (roles combined)
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: "broker,controller"
       KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
-
-      # Two listeners:
-      #   PLAINTEXT     -> used by containers inside the Docker network (port 29092)
-      #   PLAINTEXT_HOST -> used by the host machine (port 9092, mapped above)
       KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
       KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092"
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT"
       KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
       KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
-
-      # Log retention: keep messages for 72 hours.
-      # This acts as a replayable buffer: if the ingester or a downstream
-      # consumer crashes, it can re-read the last 72h of raw IODA data
-      # directly from Kafka without needing to re-poll the API.
       KAFKA_LOG_RETENTION_HOURS: 72
-      KAFKA_LOG_RETENTION_BYTES: -1         # no size cap, only time cap
-      KAFKA_LOG_SEGMENT_BYTES: 134217728    # 128 MB segments
-
-      # Replication: 1 (single broker — no replication possible)
+      KAFKA_LOG_RETENTION_BYTES: -1
+      KAFKA_LOG_SEGMENT_BYTES: 134217728
       KAFKA_DEFAULT_REPLICATION_FACTOR: 1
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_MIN_INSYNC_REPLICAS: 1
-
-      # Auto-create topics when the ingester first publishes.
-      # In production you'd disable this and create topics explicitly,
-      # but for an academic project it removes a manual setup step.
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_NUM_PARTITIONS: 4
-
-      # KRaft requires a cluster ID. Generate once with:
-      #   docker run --rm confluentinc/cp-kafka:7.6.1 kafka-storage random-uuid
-      # and set it in .env as KAFKA_CLUSTER_ID
       CLUSTER_ID: "${KAFKA_CLUSTER_ID}"
-
     volumes:
       - kafka-data:/var/lib/kafka/data
     healthcheck:
@@ -92,50 +58,33 @@ services:
       retries: 5
       start_period: 30s
     networks:
-      - outage-net
+      - ioda-net
 
   # -------------------------------------------------------------------------
-  # Kafka UI
-  # -------------------------------------------------------------------------
-  # Provectus Kafka UI is a lightweight, zero-configuration web dashboard.
-  # Accessible at http://localhost:8080 once the stack is running.
-  # Lets you:
-  #   - Browse topics and see message counts
-  #   - Inspect individual messages (raw JSON)
-  #   - Monitor consumer group lag
-  #   - Manually produce test messages
+  # Kafka UI — http://localhost:8080
   # -------------------------------------------------------------------------
   kafka-ui:
     image: provectuslabs/kafka-ui:v0.7.2
-    container_name: kafka-ui
+    container_name: ioda-kafka-ui
     restart: unless-stopped
     ports:
       - "8080:8080"
     environment:
-      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_NAME: ioda-local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
     depends_on:
       kafka:
         condition: service_healthy
     networks:
-      - outage-net
+      - ioda-net
 
   # -------------------------------------------------------------------------
-  # MinIO (S3-compatible object storage)
-  # -------------------------------------------------------------------------
-  # MinIO is the Bronze data lake. It exposes an API identical to Amazon S3,
-  # meaning the same boto3 / s3fs / Spark S3A code that works in production
-  # against real S3 works here without modification.
-  #
-  # Ports:
-  #   9000  - S3 API endpoint (used by ingester, Spark, boto3)
-  #   9001  - MinIO web console (http://localhost:9001)
-  #
-  # Credentials are read from .env so they never appear in this file.
+  # MinIO — S3-compatible object storage (bronze + silver + gold)
+  # Ports: 9000 (S3 API), 9001 (web console — http://localhost:9001)
   # -------------------------------------------------------------------------
   minio:
     image: minio/minio:RELEASE.2024-04-18T19-09-19Z
-    container_name: minio
+    container_name: ioda-minio
     restart: unless-stopped
     ports:
       - "9000:9000"
@@ -153,22 +102,17 @@ services:
       retries: 5
       start_period: 20s
     networks:
-      - outage-net
+      - ioda-net
 
   # -------------------------------------------------------------------------
-  # MinIO init (one-shot bucket creation)
+  # MinIO init — bucket housekeeping (runs on every stack start)
   # -------------------------------------------------------------------------
-  # This container runs once at startup, waits for MinIO to be healthy,
-  # then creates the 'ioda-bronze' bucket if it doesn't already exist.
-  # Using 'restart: on-failure' means it retries if MinIO isn't ready yet,
-  # but won't run again once it exits 0.
-  #
-  # We also set the bucket lifecycle policy here: objects in the raw/ prefix
-  # expire after 90 days to prevent unbounded disk growth.
+  # Creates bronze, silver, gold buckets.
+  # Removes stale ioda-bronze and ioda-silver buckets from the original compose.
   # -------------------------------------------------------------------------
   minio-init:
     image: minio/mc:RELEASE.2024-04-18T16-45-29Z
-    container_name: minio-init
+    container_name: ioda-minio-init
     restart: on-failure
     depends_on:
       minio:
@@ -179,32 +123,31 @@ services:
     entrypoint: >
       /bin/sh -c "
         mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD} &&
+        echo '--- Ensuring canonical buckets exist ---' &&
         mc mb --ignore-existing local/bronze &&
         mc mb --ignore-existing local/silver &&
         mc mb --ignore-existing local/gold &&
-        echo 'Buckets ready.' &&
+        echo '--- Removing stale legacy buckets ---' &&
+        mc rb --force local/ioda-bronze 2>/dev/null && echo 'Removed ioda-bronze' || echo 'ioda-bronze: not present or not empty, skipping' &&
+        mc rb --force local/ioda-silver 2>/dev/null && echo 'Removed ioda-silver' || echo 'ioda-silver: not present or not empty, skipping' &&
+        echo '--- Current bucket list ---' &&
         mc ls local/
       "
     networks:
-      - outage-net
+      - ioda-net
 
   # -------------------------------------------------------------------------
-  # Ingester
+  # IODA Bronze Ingester
   # -------------------------------------------------------------------------
-  # The Python container that runs ioda_bronze_ingestion.py on a schedule.
-  # It pulls data from the IODA API and writes to both:
-  #   - Kafka (raw.ioda.* topics) for stream processing
-  #   - MinIO (ioda-bronze bucket) as the immutable Bronze layer
-  #
-  # The container does NOT start automatically in backfill mode — it runs
-  # the incremental cron loop by default. For backfills, use:
-  #   docker compose run --rm ingester python ioda_bronze_ingestion.py --mode backfill ...
+  # Polls IODA REST API every POLL_INTERVAL_SECONDS. Writes to:
+  #   - Kafka  (raw.ioda.alerts / raw.ioda.events / raw.ioda.signals)
+  #   - MinIO  s3a://bronze/ioda/...
   # -------------------------------------------------------------------------
   ingester:
     build:
       context: ./ingestion/ioda
       dockerfile: Dockerfile
-    container_name: ingester
+    container_name: ioda-ingester
     restart: unless-stopped
     depends_on:
       kafka:
@@ -214,29 +157,29 @@ services:
       minio-init:
         condition: service_completed_successfully
     environment:
-      # IODA API
       IODA_BASE_URL: "https://api.ioda.inetintel.cc.gatech.edu/v2"
-      # Kafka
       KAFKA_BOOTSTRAP_SERVERS: "kafka:29092"
-      # MinIO / S3
       S3_ENDPOINT_URL: "http://minio:9000"
       S3_ACCESS_KEY: "${MINIO_ROOT_USER}"
       S3_SECRET_KEY: "${MINIO_ROOT_PASSWORD}"
       S3_BUCKET_BRONZE: "bronze"
-      # Ingestion config
+      S3_BUCKET_SILVER: "silver"
       ENTITY_TYPE: "${ENTITY_TYPE:-country}"
-      ENTITY_CODES: "${ENTITY_CODES:-IQ}"
-      LOOKBACK_MINUTES: "${LOOKBACK_MINUTES:-360}"
-      POLL_INTERVAL_SECONDS: "${POLL_INTERVAL_SECONDS:-300}"
-    networks:
-      - outage-net
+      ENTITY_CODES: "${ENTITY_CODES:-IT MM IN PK UA RU PS SY IR TR BD NG US DE GB}"
+      LOOKBACK_MINUTES: "${LOOKBACK_MINUTES:-20}"
+      POLL_INTERVAL_SECONDS: "${POLL_INTERVAL_SECONDS:-900}"
     volumes:
-      # Mount the script directory so you can edit code without rebuilding
       - ./ingestion/ioda:/app
+    networks:
+      - ioda-net
 
-# -------------------------------------------------------------------------
-# RIPE Atlas Ingester (Streaming)
-# -------------------------------------------------------------------------
+  # -------------------------------------------------------------------------
+  # RIPE Atlas Bronze Ingester (WebSocket streaming)
+  # -------------------------------------------------------------------------
+  # Maintains a persistent WebSocket to RIPE Atlas. Writes to:
+  #   - Kafka  (raw.ripe.ping)
+  #   - MinIO  s3a://bronze/ripe/ping/...
+  # -------------------------------------------------------------------------
   ripe-ingester:
     build:
       context: ./ingestion/ripe
@@ -248,24 +191,106 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     environment:
-      # Override the "localhost" defaults from the Python script 
-      # so it uses the internal Docker network names instead!
       KAFKA_BOOTSTRAP_SERVERS: "kafka:29092"
       S3_ENDPOINT_URL: "http://minio:9000"
-      
-      # Pass the secure credentials from your .env file
       MINIO_ROOT_USER: "${MINIO_ROOT_USER}"
       MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD}"
       S3_BUCKET_BRONZE: "bronze"
-    networks:
-      - outage-net
     volumes:
-      # Mount the script directory so code changes apply immediately
       - ./ingestion/ripe:/app
+    networks:
+      - ioda-net
+
+  # =========================================================================
+  # SILVER LAYER — Batch jobs (on-demand, exit when done)
+  # =========================================================================
+  # Read:  s3a://bronze/...  (MinIO)
+  # Write: s3a://silver/...  (MinIO)
+  #
+  # entrypoint.sh in ./spark-jobs/ pre-creates Ivy cache dirs as the spark
+  # user before calling spark-submit, fixing the root-owned volume write error.
+  #
+  # Invoke:
+  #   docker compose run --rm --no-deps spark-silver-ioda
+  #   docker compose run --rm --no-deps spark-silver-ioda --start 2026-05-28 --end 2026-06-04
+  #   docker compose run --rm --no-deps spark-silver-ripe  --start 2026-05-28 --end 2026-06-04
+  # =========================================================================
+
+  spark-silver-ioda:
+    image: apache/spark:3.5.1
+    container_name: spark-silver-ioda
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      S3_ENDPOINT_URL:  "http://minio:9000"
+      S3_ACCESS_KEY:    "${MINIO_ROOT_USER}"
+      S3_SECRET_KEY:    "${MINIO_ROOT_PASSWORD}"
+      S3_BUCKET_BRONZE: "bronze"
+      S3_BUCKET_SILVER: "silver"
+    volumes:
+      - ./spark-jobs:/opt/spark-job
+    # python submit.py is the entrypoint; 'ioda' selects the job.
+    # Extra args from 'docker compose run spark-silver-ioda --start X --end Y'
+    # replace command: and are forwarded to silver_ioda.py by submit.py.
+    entrypoint: ["python3", "/opt/spark-job/submit.py", "ioda"]
+    command: []
+    networks:
+      - ioda-net
+
+  spark-silver-ripe:
+    image: apache/spark:3.5.1
+    container_name: spark-silver-ripe
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      S3_ENDPOINT_URL:  "http://minio:9000"
+      S3_ACCESS_KEY:    "${MINIO_ROOT_USER}"
+      S3_SECRET_KEY:    "${MINIO_ROOT_PASSWORD}"
+      S3_BUCKET_BRONZE: "bronze"
+      S3_BUCKET_SILVER: "silver"
+    volumes:
+      - ./spark-jobs:/opt/spark-job
+    entrypoint: ["python3", "/opt/spark-job/submit.py", "ripe"]
+    command: []
+    networks:
+      - ioda-net
+
+  # =========================================================================
+  # SILVER LAYER — Structured Streaming (always-on, live Kafka path)
+  # =========================================================================
+  # Consumes Kafka topics from the Bronze ingesters.
+  # Checkpoints in silver/_checkpoints/ persist offsets across restarts.
+  # =========================================================================
+  spark-silver-stream:
+    image: apache/spark:3.5.1
+    container_name: spark-silver-stream
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:29092"
+      S3_ENDPOINT_URL:         "http://minio:9000"
+      S3_ACCESS_KEY:           "${MINIO_ROOT_USER}"
+      S3_SECRET_KEY:           "${MINIO_ROOT_PASSWORD}"
+      S3_BUCKET_BRONZE:        "bronze"
+      S3_BUCKET_SILVER:        "silver"
+      MICRO_BATCH_INTERVAL:    "${MICRO_BATCH_INTERVAL:-2 minutes}"
+    volumes:
+      - ./spark-jobs:/opt/spark-job
+    entrypoint: ["python3", "/opt/spark-job/submit.py", "stream"]
+    networks:
+      - ioda-net
 
 # -------------------------------------------------------------------------
-# Named volumes — data persists across container restarts
+# Named volumes
 # -------------------------------------------------------------------------
 volumes:
   kafka-data:
@@ -274,8 +299,8 @@ volumes:
     driver: local
 
 # -------------------------------------------------------------------------
-# Network — all containers share one bridge network
+# Network
 # -------------------------------------------------------------------------
 networks:
-  outage-net:
+  ioda-net:
     driver: bridge
