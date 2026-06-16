@@ -1,37 +1,18 @@
 """
-backfill.py — IODA historical data loader
-==========================================
-Fetches country codes directly from the IODA API and runs the ingester
-container sequentially for each one.
+backfill.py — Master Historical Data Loader (IODA & RIPE)
+=========================================================
+Orchestrates historical data backfills across different ingestion containers.
 
 Usage:
-    python backfill.py                        # all countries, 30 days
-    python backfill.py --days 7               # all countries, 7 days
-    python backfill.py --countries IT IQ      # specific countries, 30 days
-    python backfill.py --countries IT --days 7
-    python backfill.py --dry-run              # print what would run, don't execute
+    python backfill.py --source ioda --days 7          # IODA only
+    python backfill.py --source ripe --days 7          # RIPE only
+    python backfill.py --source all  --days 30         # Both sources
 
-Must be run from the repo root with the Docker stack already up:
-    docker compose up -d
-    python backfill.py --days 7
-
-Default country set (15 countries, ~20 min for 30-day backfill):
-  IT MM IN PK UA RU PS SY IR TR BD NG US DE GB
-
-Selected for: 
-    IT (home country, AGCOM validation), 
-    MM/IN/PK (top 3 shutdown frequency 2024), 
-    UA/RU/PS/SY (active conflict zones), 
-    IR/TR/BD (persistent censorship), 
-    NG (Africa's largest market), 
-    US/DE/GB (stable Western baselines).
-
-WARNING: running without --countries fetches all 253 countries from the IODA API
-and runs them sequentially. At ~75 seconds per country this takes approximately
-5 hours. For a first run, use --countries IT IQ UA TR NG or similar to target
-specific countries.
+    # IODA specific filtering:
+    python backfill.py --source ioda --countries IT IQ --days 7
 """
-
+from dotenv import load_dotenv, find_dotenv
+import os
 import argparse
 import subprocess
 import sys
@@ -40,12 +21,8 @@ import requests
 
 IODA_ENTITIES_URL = "https://api.ioda.inetintel.cc.gatech.edu/v2/entities/query"
 
-
 def fetch_all_country_codes() -> list[str]:
-    """
-    Fetch every country entity code available in IODA.
-    Returns a sorted list of ISO 2-letter codes e.g. ['AE', 'AF', 'AG', ...]
-    """
+    """Fetch every country entity code available in IODA."""
     print("Fetching available country codes from IODA API...")
     try:
         resp = requests.get(
@@ -56,28 +33,18 @@ def fetch_all_country_codes() -> list[str]:
         )
         resp.raise_for_status()
         data = resp.json().get("data", [])
-
-        # Response is {"data": [{"code": "IT", "name": "Italy", ...}, ...]}
         entities = data if isinstance(data, list) else []
-
         codes = sorted(e["code"] for e in entities if "code" in e)
         if not codes:
             raise ValueError("No country codes found in API response")
-
         print(f"Found {len(codes)} countries: {', '.join(codes)}")
         return codes
-
     except Exception as exc:
         print(f"ERROR: Could not fetch country codes from IODA: {exc}")
-        print("Check your internet connection or try --countries IT IQ to run manually.")
         sys.exit(1)
 
-
-def run_backfill(country_code: str, days: int, dry_run: bool) -> bool:
-    """
-    Run the ingester container for one country.
-    Returns True on success, False on failure.
-    """
+def run_ioda_backfill(country_code: str, days: int, dry_run: bool) -> bool:
+    """Run the IODA ingester container for one country."""
     cmd = [
         "docker", "compose", "run", "--rm",
         "-e", f"ENTITY_CODES={country_code}",
@@ -85,9 +52,7 @@ def run_backfill(country_code: str, days: int, dry_run: bool) -> bool:
         "python", "run_loop.py", "backfill", str(days),
     ]
 
-    print(f"\n>>> [{country_code}] Starting {days}-day backfill...")
-    print(f"    {' '.join(cmd)}")
-
+    print(f"\n>>> [IODA] [{country_code}] Starting {days}-day backfill...")
     if dry_run:
         print("    (dry-run — skipping)")
         return True
@@ -103,53 +68,76 @@ def run_backfill(country_code: str, days: int, dry_run: bool) -> bool:
         print(f"    [{country_code}] FAILED (exit code {result.returncode})")
         return False
 
+def run_ripe_backfill(days: int, dry_run: bool) -> bool:
+    """Run the RIPE historical backfill container for all priority countries."""
+    # RIPE script automatically handles all target countries via probe_mapping.json
+    cmd = [
+        "docker", "compose", "run", "--rm",
+        "ripe-ingester",
+        "python", "ripe_bronze_ingestion.py", "--days", str(days),
+    ]
+
+    print(f"\n>>> [RIPE Atlas] Starting {days}-day backfill for all target countries...")
+    if dry_run:
+        print("    (dry-run — skipping)")
+        return True
+
+    start = time.monotonic()
+    result = subprocess.run(cmd)
+    elapsed = time.monotonic() - start
+
+    if result.returncode == 0:
+        print(f"    [RIPE Atlas] Done in {elapsed:.0f}s")
+        return True
+    else:
+        print(f"    [RIPE Atlas] FAILED (exit code {result.returncode})")
+        return False
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Backfill IODA bronze data for one or all countries."
-    )
-    parser.add_argument(
-        "--countries",
-        nargs="+",
-        metavar="CODE",
-        help="ISO country codes to backfill (e.g. IT IQ UA). Omit for all.",
-    )
-    parser.add_argument(
-        "--days",
-        type=int,
-        default=30,
-        help="Number of days to backfill (default: 30).",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print commands without executing them.",
-    )
+    load_dotenv() # Load variables from .env
+    
+    parser = argparse.ArgumentParser(description="Master Backfill Orchestrator (IODA & RIPE)")
+    parser.add_argument("--source", choices=["ioda", "ripe", "all"], default="all", help="Which data source to backfill.")
+    parser.add_argument("--countries", nargs="+", metavar="CODE", help="ISO country codes for IODA. Omit to use .env targets.")
+    parser.add_argument("--days", type=int, default=30, help="Number of days to backfill (default: 30).")
+    parser.add_argument("--dry-run", action="store_true", help="Print commands without executing them.")
     args = parser.parse_args()
 
-    countries = args.countries if args.countries else fetch_all_country_codes()
-
-    print(f"\nBackfill plan: {len(countries)} countries × {args.days} days")
-    if args.dry_run:
-        print("(dry-run mode — nothing will actually run)\n")
-
-    failed = []
-    for i, code in enumerate(countries, 1):
-        print(f"\n[{i}/{len(countries)}]", end="")
-        success = run_backfill(code, args.days, args.dry_run)
+    print(f"\n=== Master Backfill Plan: {args.days} Days | Source: {args.source.upper()} ===")
+    
+    # --- RIPE BACKFILL ---
+    if args.source in ["ripe", "all"]:
+        success = run_ripe_backfill(args.days, args.dry_run)
         if not success:
-            failed.append(code)
+            print("\nWARNING: RIPE Backfill encountered an error.")
 
-    print("\n" + "=" * 50)
-    print(f"Backfill complete: {len(countries) - len(failed)}/{len(countries)} succeeded")
-    if failed:
-        print(f"Failed countries: {', '.join(failed)}")
-        print("Re-run just the failures with:")
-        print(f"  python backfill.py --countries {' '.join(failed)} --days {args.days}")
-        sys.exit(1)
-    else:
-        print("All countries ingested successfully.")
+    # --- IODA BACKFILL ---
+    if args.source in ["ioda", "all"]:
+        # NEW LOGIC: Use CLI args first, then .env file, then fallback to all 253.
+        if args.countries:
+            countries = args.countries
+        else:
+            env_string = os.environ.get("TARGET_COUNTRIES")
+            if env_string:
+                countries = env_string.split()
+                print(f"Loaded {len(countries)} target countries from .env file.")
+            else:
+                print("No targets in .env. Defaulting to ALL countries.")
+                countries = fetch_all_country_codes()
+                
+        print(f"\nIODA Plan: {len(countries)} countries")
+        
+        failed = []
+        for i, code in enumerate(countries, 1):
+            print(f"\n[{i}/{len(countries)}]", end="")
+            success = run_ioda_backfill(code, args.days, args.dry_run)
+            if not success:
+                failed.append(code)
 
+        print("\n" + "=" * 50)
+        print(f"IODA Backfill complete: {len(countries) - len(failed)}/{len(countries)} succeeded")
+        if failed:
+            print(f"Failed IODA countries: {', '.join(failed)}")
 
 if __name__ == "__main__":
     main()

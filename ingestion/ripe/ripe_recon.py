@@ -8,9 +8,16 @@ we must filter the incoming data stream by probe ID to isolate our 15 countries.
 
 import json
 import requests
+import os
+from dotenv import load_dotenv, find_dotenv
 
-# The 15 priority countries chosen by your team
-COUNTRIES = ["IT", "MM", "IN", "PK", "UA", "RU", "PS", "SY", "IR", "TR", "BD", "NG", "US", "DE", "GB"]
+# find_dotenv() automatically searches parent folders until it finds the .env!
+load_dotenv(find_dotenv())
+
+# Pull the string from .env, and use .split() to turn it into a Python list
+# We keep your 15 countries as a fallback just in case the .env is missing!
+env_string = os.environ.get("TARGET_COUNTRIES", "IT MM IN PK UA RU PS SY IR TR BD NG US DE GB")
+COUNTRIES = env_string.split()
 
 # These are the RIPE Atlas Built-In Measurement IDs for IPv4 Pings 
 # to the 13 Global DNS Root Servers (A through M). 
