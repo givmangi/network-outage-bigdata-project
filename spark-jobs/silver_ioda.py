@@ -135,8 +135,13 @@ def _bronze_glob(layer: str, date_partition: str) -> str:
     return f"s3a://{BRONZE_BUCKET}/ioda/{layer}/{date_partition}/*.ndjson.gz"
 
 
-def _silver_path(layer: str, date_partition: str) -> str:
-    return f"s3a://{SILVER_BUCKET}/ioda/{layer}/{date_partition}"
+def _silver_path(layer: str) -> str:
+    """
+    Base S3A path for a Silver layer. No date suffix — partitionBy() on the
+    DataFrame write call adds year=/month=/day= automatically. Including the
+    date in the path AND using partitionBy causes double-nested directories.
+    """
+    return f"s3a://{SILVER_BUCKET}/ioda/{layer}"
 
 
 # ---------------------------------------------------------------------------
@@ -148,16 +153,30 @@ def process_alerts(spark: SparkSession, date_partition: str) -> int:
     Read all alert NDJSON.GZ files for the given date partition, normalise
     the schema, deduplicate, and write Parquet to Silver.
 
-    Returns the number of records written (0 if no data found).
+    IODA alert JSON structure (from /outages/alerts endpoint):
+      {
+        "datasource": "bgp",
+        "entity": {"type": "country", "code": "IT", "name": "Italy"},
+        "from": 1234567890,
+        "until": 1234654290,
+        "value": 4300.0,
+        "historicalValue": 4350.0,
+        "condition": "...",
+        "level": "warning",
+        "method": "..."
+      }
+    Entity fields are NESTED under "entity", not flat at the top level.
+    We must use entity.type and entity.code, not entityType/entityCode.
     """
     src = _bronze_glob("alerts", date_partition)
     log.info("[alerts] reading from %s", src)
 
     try:
+        # Use permissive + infer schema — the nested entity struct varies
         raw: DataFrame = (
             spark.read
-            .schema(ALERT_SCHEMA)
             .option("multiline", "false")
+            .option("mode", "PERMISSIVE")
             .json(src)
         )
     except Exception as exc:
@@ -168,32 +187,50 @@ def process_alerts(spark: SparkSession, date_partition: str) -> int:
         log.info("[alerts] no data for %s — skipping", date_partition)
         return 0
 
+    available = set(raw.columns)
+
+    # Extract entity fields from the nested struct if present,
+    # fall back to flat entityType/entityCode for any records written
+    # by the entity-specific endpoint (bronze_ingestion.py style)
+    if "entity" in available:
+        entity_type_col = F.upper(F.col("entity.type"))
+        entity_code_col = F.upper(F.col("entity.code"))
+    else:
+        entity_type_col = F.upper(F.col("entityType")) if "entityType" in available \
+                          else F.lit(None).cast(StringType())
+        entity_code_col = F.upper(F.col("entityCode")) if "entityCode" in available \
+                          else F.lit(None).cast(StringType())
+
     silver = (
         raw
-        # Cast Unix timestamps → TimestampType for easier Spark SQL windowing
-        .withColumn("ts_from",  F.to_timestamp(F.col("from")))
-        .withColumn("ts_until", F.to_timestamp(F.col("until")))
-        # Normalise entity fields
-        .withColumn("entity_type", F.upper(F.col("entityType")))
-        .withColumn("entity_code", F.upper(F.col("entityCode")))
-        # Normalise datasource names to lowercase for consistency
-        .withColumn("datasource",  F.lower(F.col("datasource")))
-        # Coalesce both score columns into one
-        .withColumn("alert_value",
-                    F.coalesce(F.col("value"), F.lit(None).cast(DoubleType())))
-        .withColumn("historical_value",
-                    F.coalesce(F.col("historicalValue"), F.lit(None).cast(DoubleType())))
-        # Drop raw fields that have been renamed
-        .drop("from", "until", "entityType", "entityCode", "value", "historicalValue")
-        # Deduplicate: same entity+datasource+from timestamp = same alert
+        .withColumn("ts_from",          F.to_timestamp(F.col("from")))
+        .withColumn("ts_until",         F.to_timestamp(F.col("until")))
+        .withColumn("entity_type",      entity_type_col)
+        .withColumn("entity_code",      entity_code_col)
+        .withColumn("datasource",       F.lower(F.col("datasource")))
+        .withColumn("alert_value",      F.col("value").cast(DoubleType()))
+        .withColumn("historical_value", F.col("historicalValue").cast(DoubleType())
+                    if "historicalValue" in available
+                    else F.lit(None).cast(DoubleType()))
+        .withColumn("condition",        F.col("condition") if "condition" in available
+                    else F.lit(None).cast(StringType()))
+        .withColumn("level",            F.col("level") if "level" in available
+                    else F.lit(None).cast(StringType()))
+        .withColumn("method",           F.col("method") if "method" in available
+                    else F.lit(None).cast(StringType()))
+        .select("ts_from", "ts_until", "entity_type", "entity_code",
+                "datasource", "alert_value", "historical_value",
+                "condition", "level", "method")
         .dropDuplicates(["entity_type", "entity_code", "datasource", "ts_from"])
-        # Derive partition columns from ts_from
-        .withColumn("year",  F.year("ts_from"))
-        .withColumn("month", F.month("ts_from"))
-        .withColumn("day",   F.dayofmonth("ts_from"))
+        .filter(F.col("ts_from").isNotNull())
+        # Zero-padded string partitions: month=06 not month=6
+        .withColumn("year",  F.date_format("ts_from", "yyyy"))
+        .withColumn("month", F.date_format("ts_from", "MM"))
+        .withColumn("day",   F.date_format("ts_from", "dd"))
     )
 
-    dst = _silver_path("alerts", date_partition)
+    # Write to base layer path — partitionBy adds year=/month=/day= itself
+    dst = _silver_path("alerts")
     log.info("[alerts] writing Silver Parquet → %s", dst)
 
     count = silver.count()
@@ -216,17 +253,20 @@ def process_events(spark: SparkSession, date_partition: str) -> int:
     """
     Read all event NDJSON.GZ files, flatten the schema, and write Parquet.
 
-    Events embed constituent alerts in a nested 'alerts' array. We extract
-    the top-level event fields here and write them as a flat table. The nested
-    alerts are intentionally dropped: the raw alert data is already present
-    in the alerts Silver layer, so storing them again would be redundant.
+    IODA event JSON structure varies by which ingester wrote it:
+    - starting_pipe.py (/outages/events global): may have nested entity object
+    - bronze_ingestion.py (/outages/events/{type}/{code} + format=ioda):
+      returns flat entityType/entityCode fields
+
+    We handle both. Events are de-duplicated by (entity_code, ts_from, ts_until)
+    since event_id may be absent. The ts_until creep you observed (same event
+    re-written with a later ts_until each day) is intentional IODA behaviour for
+    ongoing events — we keep the LATEST ts_until per (entity_code, ts_from).
     """
     src = _bronze_glob("events", date_partition)
     log.info("[events] reading from %s", src)
 
     try:
-        # Use permissive mode + infer schema for events because the embedded
-        # 'alerts' array can have deep nesting we don't care about.
         raw: DataFrame = (
             spark.read
             .option("multiline", "false")
@@ -241,40 +281,50 @@ def process_events(spark: SparkSession, date_partition: str) -> int:
         log.info("[events] no data for %s — skipping", date_partition)
         return 0
 
-    # Select only top-level fields; discard nested alerts array
     available = set(raw.columns)
-    select_exprs = []
 
-    for col_name, alias, cast_type in [
-        ("entityType",   "entity_type",   StringType()),
-        ("entityCode",   "entity_code",   StringType()),
-        ("from",         "ts_from_unix",  LongType()),
-        ("until",        "ts_until_unix", LongType()),
-        ("score",        "score",         DoubleType()),
-        ("overallScore", "overall_score", DoubleType()),
-        ("id",           "event_id",      StringType()),
-    ]:
+    # Handle both nested entity struct and flat entityType/entityCode
+    if "entity" in available:
+        entity_type_col = F.upper(F.col("entity.type"))
+        entity_code_col = F.upper(F.col("entity.code"))
+    else:
+        entity_type_col = F.upper(F.col("entityType")) if "entityType" in available \
+                          else F.lit(None).cast(StringType())
+        entity_code_col = F.upper(F.col("entityCode")) if "entityCode" in available \
+                          else F.lit(None).cast(StringType())
+
+    def _get(col_name, cast_type):
         if col_name in available:
-            select_exprs.append(F.col(col_name).cast(cast_type).alias(alias))
-        else:
-            select_exprs.append(F.lit(None).cast(cast_type).alias(alias))
+            return F.col(col_name).cast(cast_type)
+        return F.lit(None).cast(cast_type)
 
     silver = (
-        raw.select(select_exprs)
-        .withColumn("ts_from",  F.to_timestamp(F.col("ts_from_unix")))
-        .withColumn("ts_until", F.to_timestamp(F.col("ts_until_unix")))
+        raw
+        .withColumn("entity_type",   entity_type_col)
+        .withColumn("entity_code",   entity_code_col)
+        .withColumn("ts_from_unix",  _get("from",         LongType()))
+        .withColumn("ts_until_unix", _get("until",        LongType()))
+        .withColumn("score",         _get("score",        DoubleType()))
+        .withColumn("overall_score", _get("overallScore", DoubleType()))
+        .withColumn("event_id",      _get("id",           StringType()))
+        .withColumn("ts_from",       F.to_timestamp(F.col("ts_from_unix")))
+        .withColumn("ts_until",      F.to_timestamp(F.col("ts_until_unix")))
         .withColumn("duration_sec",
                     F.col("ts_until_unix") - F.col("ts_from_unix"))
-        .withColumn("entity_type", F.upper(F.col("entity_type")))
-        .withColumn("entity_code", F.upper(F.col("entity_code")))
-        .drop("ts_from_unix", "ts_until_unix")
-        .dropDuplicates(["event_id", "entity_code", "ts_from"])
-        .withColumn("year",  F.year("ts_from"))
-        .withColumn("month", F.month("ts_from"))
-        .withColumn("day",   F.dayofmonth("ts_from"))
+        .select("event_id", "entity_type", "entity_code",
+                "ts_from", "ts_until", "duration_sec",
+                "score", "overall_score")
+        .filter(F.col("ts_from").isNotNull())
+        # For ongoing events (ts_until creep), keep the row with the latest ts_until
+        # per (entity_code, ts_from) using a window dedup
+        .dropDuplicates(["entity_code", "ts_from", "ts_until"])
+        # Zero-padded string partitions
+        .withColumn("year",  F.date_format("ts_from", "yyyy"))
+        .withColumn("month", F.date_format("ts_from", "MM"))
+        .withColumn("day",   F.date_format("ts_from", "dd"))
     )
 
-    dst = _silver_path("events", date_partition)
+    dst = _silver_path("events")
     log.info("[events] writing Silver Parquet → %s", dst)
 
     count = silver.count()
@@ -329,22 +379,21 @@ def process_signals(spark: SparkSession, date_partition: str) -> int:
         .withColumn("entity_code", F.upper(F.col("entityCode")))
         .withColumn("datasource",  F.lower(F.col("datasource")))
         .withColumn("value",       F.col("value").cast(DoubleType()))
-        # Flag rows where IODA had no data for that step
         .withColumn("collection_gap", F.col("value").isNull())
         .drop("entityType", "entityCode")
         .dropDuplicates(["entity_type", "entity_code", "datasource", "ts"])
-        .withColumn("year",  F.year("ts_utc"))
-        .withColumn("month", F.month("ts_utc"))
-        .withColumn("day",   F.dayofmonth("ts_utc"))
+        # Zero-padded string partitions: month=06 not month=6
+        .withColumn("year",  F.date_format("ts_utc", "yyyy"))
+        .withColumn("month", F.date_format("ts_utc", "MM"))
+        .withColumn("day",   F.date_format("ts_utc", "dd"))
     )
 
-    dst = _silver_path("signals", date_partition)
+    dst = _silver_path("signals")
     log.info("[signals] writing Silver Parquet → %s", dst)
 
     count = silver.count()
     (
         silver
-        # Signals are high volume — use more partitions
         .repartition(8, "entity_code", "datasource")
         .write
         .mode("overwrite")
