@@ -61,43 +61,21 @@ logging.basicConfig(
 log = logging.getLogger("silver_ioda")
 
 # ---------------------------------------------------------------------------
-# Explicit Silver schemas
+# Confirmed bronze schemas (from real IODA files)
 # ---------------------------------------------------------------------------
-# We define explicit schemas rather than relying on inferSchema=true.
-# This prevents schema drift from silently corrupting the Silver layer
-# if IODA ever changes a field name or type.
-
-ALERT_SCHEMA = StructType([
-    StructField("entityType",    StringType(),  True),
-    StructField("entityCode",    StringType(),  True),
-    StructField("datasource",    StringType(),  True),
-    StructField("condition",     StringType(),  True),
-    StructField("value",         DoubleType(),  True),
-    StructField("historicalValue", DoubleType(), True),
-    StructField("from",          LongType(),    True),
-    StructField("until",         LongType(),    True),
-    StructField("level",         StringType(),  True),
-    StructField("method",        StringType(),  True),
-])
-
-EVENT_SCHEMA = StructType([
-    StructField("entityType",    StringType(),  True),
-    StructField("entityCode",    StringType(),  True),
-    StructField("from",          LongType(),    True),
-    StructField("until",         LongType(),    True),
-    StructField("score",         DoubleType(),  True),
-    StructField("overallScore",  DoubleType(),  True),
-    StructField("id",            StringType(),  True),
-])
+# These are used only by process_signals (which has stable flat fields).
+# Alerts and events use schema inference (PERMISSIVE mode) because the
+# nested entity struct is handled dynamically.
 
 SIGNAL_SCHEMA = StructType([
-    StructField("entityType",    StringType(),  True),
-    StructField("entityCode",    StringType(),  True),
-    StructField("datasource",    StringType(),  True),
-    StructField("ts",            LongType(),    True),
-    StructField("value",         DoubleType(),  True),
-    StructField("step",          IntegerType(), True),
-    StructField("nativeStep",    IntegerType(), True),
+    # Fields as written by _expand_signal in starting_pipe.py
+    StructField("entityType",  StringType(),  True),
+    StructField("entityCode",  StringType(),  True),
+    StructField("datasource",  StringType(),  True),
+    StructField("ts",          LongType(),    True),
+    StructField("value",       DoubleType(),  True),
+    StructField("step",        IntegerType(), True),
+    StructField("nativeStep",  IntegerType(), True),
 ])
 
 
@@ -253,15 +231,21 @@ def process_events(spark: SparkSession, date_partition: str) -> int:
     """
     Read all event NDJSON.GZ files, flatten the schema, and write Parquet.
 
-    IODA event JSON structure varies by which ingester wrote it:
-    - starting_pipe.py (/outages/events global): may have nested entity object
-    - bronze_ingestion.py (/outages/events/{type}/{code} + format=ioda):
-      returns flat entityType/entityCode fields
+    Confirmed bronze schema (from real files):
+    {
+      "entity":     {"code": "TR", "name": "Turkey", "type": "country",
+                     "subnames": [], "attrs": {"fqid": "..."}},
+      "from":       1778733000,      # unix epoch
+      "until":      1779235200,      # unix epoch
+      "score":      609484.8,        # severity score
+      "datasource": "gtr",           # which signal triggered
+      "method":     "sarima",
+      "alerts":     [...]            # nested array — dropped (stored in alerts layer)
+    }
 
-    We handle both. Events are de-duplicated by (entity_code, ts_from, ts_until)
-    since event_id may be absent. The ts_until creep you observed (same event
-    re-written with a later ts_until each day) is intentional IODA behaviour for
-    ongoing events — we keep the LATEST ts_until per (entity_code, ts_from).
+    No overallScore, no id field, no flat entityType/entityCode.
+    Dedup by (entity_code, ts_from, ts_until) — same event re-written with
+    a later ts_until each day as IODA updates ongoing outages.
     """
     src = _bronze_glob("events", date_partition)
     log.info("[events] reading from %s", src)
@@ -281,44 +265,28 @@ def process_events(spark: SparkSession, date_partition: str) -> int:
         log.info("[events] no data for %s — skipping", date_partition)
         return 0
 
-    available = set(raw.columns)
-
-    # Handle both nested entity struct and flat entityType/entityCode
-    if "entity" in available:
-        entity_type_col = F.upper(F.col("entity.type"))
-        entity_code_col = F.upper(F.col("entity.code"))
-    else:
-        entity_type_col = F.upper(F.col("entityType")) if "entityType" in available \
-                          else F.lit(None).cast(StringType())
-        entity_code_col = F.upper(F.col("entityCode")) if "entityCode" in available \
-                          else F.lit(None).cast(StringType())
-
-    def _get(col_name, cast_type):
-        if col_name in available:
-            return F.col(col_name).cast(cast_type)
-        return F.lit(None).cast(cast_type)
-
     silver = (
         raw
-        .withColumn("entity_type",   entity_type_col)
-        .withColumn("entity_code",   entity_code_col)
-        .withColumn("ts_from_unix",  _get("from",         LongType()))
-        .withColumn("ts_until_unix", _get("until",        LongType()))
-        .withColumn("score",         _get("score",        DoubleType()))
-        .withColumn("overall_score", _get("overallScore", DoubleType()))
-        .withColumn("event_id",      _get("id",           StringType()))
-        .withColumn("ts_from",       F.to_timestamp(F.col("ts_from_unix")))
-        .withColumn("ts_until",      F.to_timestamp(F.col("ts_until_unix")))
-        .withColumn("duration_sec",
-                    F.col("ts_until_unix") - F.col("ts_from_unix"))
-        .select("event_id", "entity_type", "entity_code",
+        # Entity is always a nested struct in events
+        .withColumn("entity_type",  F.upper(F.col("entity.type")))
+        .withColumn("entity_code",  F.upper(F.col("entity.code")))
+        .withColumn("entity_name",  F.col("entity.name"))
+        # Timestamps
+        .withColumn("ts_from",      F.to_timestamp(F.col("from").cast(LongType())))
+        .withColumn("ts_until",     F.to_timestamp(F.col("until").cast(LongType())))
+        .withColumn("duration_sec", F.col("until").cast(LongType()) - F.col("from").cast(LongType()))
+        # Metrics
+        .withColumn("score",        F.col("score").cast(DoubleType()))
+        .withColumn("datasource",   F.lower(F.col("datasource")))
+        .withColumn("method",       F.col("method"))
+        # Drop the nested alerts array and raw fields
+        .select("entity_type", "entity_code", "entity_name",
                 "ts_from", "ts_until", "duration_sec",
-                "score", "overall_score")
+                "score", "datasource", "method")
         .filter(F.col("ts_from").isNotNull())
-        # For ongoing events (ts_until creep), keep the row with the latest ts_until
-        # per (entity_code, ts_from) using a window dedup
+        .filter(F.col("entity_code").isNotNull())
+        # Keep all snapshots of ongoing events (ts_until creeps forward each day)
         .dropDuplicates(["entity_code", "ts_from", "ts_until"])
-        # Zero-padded string partitions
         .withColumn("year",  F.date_format("ts_from", "yyyy"))
         .withColumn("month", F.date_format("ts_from", "MM"))
         .withColumn("day",   F.date_format("ts_from", "dd"))

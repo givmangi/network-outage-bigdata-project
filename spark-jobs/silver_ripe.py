@@ -1,20 +1,41 @@
 """
 silver_ripe.py — RIPE Atlas Silver Layer Batch Job
 ====================================================
-Reads raw NDJSON.GZ files from the Bronze MinIO bucket (s3a://bronze/ripe/...),
-applies firmware-version-aware RTT extraction, packet-loss calculation,
-ICMP rate-limit detection, and SHA-256 probe ID anonymisation, then writes
-columnar Parquet to the Silver MinIO bucket (s3a://silver/ripe/...).
+Reads NDJSON.GZ ping measurement files from s3a://bronze/ripe/ping/,
+normalises the schema, computes derived metrics, anonymises probe IDs,
+and writes Parquet to s3a://silver/ripe/ping/.
 
-Bronze layout consumed:
-  s3a://bronze/ripe/ping/year=YYYY/month=MM/day=DD/measurement_<msm_id>_<ts>.ndjson.gz
+Confirmed bronze schema (from real measurement files, firmware 5080/5090):
+{
+  "fw": 5080,              # firmware version (all >= 5000 in practice)
+  "mver": "2.6.2",         # parser version string
+  "lts": 43,               # last time synced (seconds ago)
+  "af": 6,                 # address family: 4=IPv4, 6=IPv6
+  "msm_id": 2001,          # measurement ID (which root server)
+  "msm_name": "Ping",
+  "prb_id": 28762,         # probe ID — will be SHA-256 hashed
+  "timestamp": 1781710924, # unix epoch of measurement
+  "type": "ping",
+  "step": 240,             # measurement interval in seconds
+  "dst_name": "2001:7fd::1",
+  "dst_addr": "2001:7fd::1",
+  "src_addr": "...",       # source IP — DROPPED (PII)
+  "from": "...",           # same as src_addr — DROPPED (PII)
+  "proto": "ICMP",
+  "ttl": 60,
+  "size": 20,
+  "sent": 3,
+  "rcvd": 3,
+  "dup": 0,
+  "min": 14.639,
+  "max": 15.196,
+  "avg": 14.862,
+  "result": [{"rtt": 15.196}, {"rtt": 14.753}, {"rtt": 14.639}],
+  "country_code": "DE"     # injected by ingester from probe_mapping.json
+}
 
 Silver layout produced:
   s3a://silver/ripe/ping/year=YYYY/month=MM/day=DD/part-*.parquet
-
-Usage (via docker compose):
-    docker compose run --rm --no-deps spark-silver-ripe
-    docker compose run --rm --no-deps spark-silver-ripe --start 2026-05-28 --end 2026-06-04
 """
 
 from __future__ import annotations
@@ -28,8 +49,7 @@ from datetime import datetime, timedelta, timezone
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql import functions as F
 from pyspark.sql.types import (
-    ArrayType, DoubleType, FloatType, IntegerType, LongType,
-    StringType, StructField, StructType, BooleanType,
+    DoubleType, IntegerType, LongType, StringType,
 )
 
 # ---------------------------------------------------------------------------
@@ -49,51 +69,9 @@ logging.basicConfig(
 )
 log = logging.getLogger("silver_ripe")
 
-# ---------------------------------------------------------------------------
-# Bronze RIPE ping schema
-# ---------------------------------------------------------------------------
-# We cover both firmware generations with a superset schema.
-# Fields present only in one firmware version will be null in the other.
-# The 'result' array holds per-packet RTT objects in newer firmware.
-
-PING_RESULT_ITEM = StructType([
-    StructField("rtt",  DoubleType(), True),
-    StructField("dup",  IntegerType(), True),
-    StructField("ttl",  IntegerType(), True),
-])
-
-RIPE_PING_SCHEMA = StructType([
-    # Core measurement metadata
-    StructField("fw",          IntegerType(), True),   # firmware version (e.g. 4610, 5020)
-    StructField("mver",        StringType(),  True),   # parser version (fw >= 5000)
-    StructField("msm_id",      IntegerType(), True),   # measurement ID
-    StructField("prb_id",      IntegerType(), True),   # probe ID (to be hashed)
-    StructField("timestamp",   LongType(),    True),   # Unix epoch of the measurement
-    StructField("type",        StringType(),  True),   # should always be "ping"
-    StructField("proto",       StringType(),  True),   # "ICMP" or "UDP"
-    # Target
-    StructField("dst_name",    StringType(),  True),
-    StructField("dst_addr",    StringType(),  True),   # will be dropped (PII-adjacent)
-    StructField("from",        StringType(),  True),   # source IP — DROPPED
-    # Aggregate RTT fields (firmware < 5000 style)
-    StructField("avg",         DoubleType(),  True),
-    StructField("min",         DoubleType(),  True),
-    StructField("max",         DoubleType(),  True),
-    # Packet counts
-    StructField("sent",        IntegerType(), True),
-    StructField("rcvd",        IntegerType(), True),
-    StructField("dup",         IntegerType(), True),
-    # Per-packet results array (firmware >= 5000)
-    StructField("result", ArrayType(PING_RESULT_ITEM), True),
-    # Injected by the ingester from probe_mapping.json
-    StructField("country_code", StringType(), True),
-    # Error field (firmware >= 5000)
-    StructField("err",         StringType(),  True),
-])
-
 
 # ---------------------------------------------------------------------------
-# Spark session factory
+# Spark session
 # ---------------------------------------------------------------------------
 
 def build_spark(app_name: str = "silver_ripe") -> SparkSession:
@@ -114,36 +92,25 @@ def build_spark(app_name: str = "silver_ripe") -> SparkSession:
 
 
 # ---------------------------------------------------------------------------
-# RTT extraction UDF (firmware-version-aware)
-# ---------------------------------------------------------------------------
-# For firmware >= 5000 the top-level avg/min/max may be absent; instead
-# the 'result' array contains per-packet RTTs. We compute the aggregate
-# values from the array if the scalar fields are missing.
-
-def _compute_rtt_from_result(result_col: F.Column) -> tuple[F.Column, F.Column, F.Column]:
-    """
-    Return (avg_rtt, min_rtt, max_rtt) columns computed from the 'result'
-    array column, filtering out null RTTs (timeouts / {"x": "*"} entries).
-    """
-    valid_rtts = F.filter(result_col, lambda r: r["rtt"].isNotNull())
-    rtts       = F.transform(valid_rtts, lambda r: r["rtt"])
-    avg_from_arr = F.aggregate(rtts, F.lit(0.0), lambda acc, x: acc + x,
-                               lambda acc: acc / F.size(rtts))
-    min_from_arr = F.aggregate(rtts, F.lit(float("inf")),
-                               lambda acc, x: F.least(acc, x))
-    max_from_arr = F.aggregate(rtts, F.lit(float("-inf")),
-                               lambda acc, x: F.greatest(acc, x))
-    return avg_from_arr, min_from_arr, max_from_arr
-
-
-# ---------------------------------------------------------------------------
-# Main transform
+# Transform: RIPE ping
 # ---------------------------------------------------------------------------
 
 def process_ping(spark: SparkSession, date_partition: str) -> int:
     """
-    Read all RIPE ping NDJSON.GZ files for the given date partition, apply
-    normalisation and enrichment, and write Parquet to the Silver layer.
+    Read all RIPE ping NDJSON.GZ files for a date partition and write Silver.
+
+    All files in practice use firmware >= 5000 so avg/min/max are always
+    present at the top level. The result[] array contains per-packet RTTs
+    which we use to count actual packet-level data (some packets may be
+    lost even when rcvd > 0).
+
+    Derived metrics:
+    - packet_loss: 1 - rcvd/sent, clipped to [0, 1]
+    - icmp_filtered: sent > 0 AND rcvd == 0 AND avg IS NULL
+      (host rate-limiting ICMP, not a genuine outage)
+    - rtt_stddev: computed from the result[] array where available
+
+    PII: prb_id hashed with SHA-256; src_addr and from (source IP) dropped.
     """
     src = f"s3a://{BRONZE_BUCKET}/ripe/ping/{date_partition}/*.ndjson.gz"
     log.info("[ripe/ping] reading from %s", src)
@@ -151,7 +118,6 @@ def process_ping(spark: SparkSession, date_partition: str) -> int:
     try:
         raw: DataFrame = (
             spark.read
-            .schema(RIPE_PING_SCHEMA)
             .option("multiline", "false")
             .option("mode", "PERMISSIVE")
             .json(src)
@@ -164,133 +130,67 @@ def process_ping(spark: SparkSession, date_partition: str) -> int:
         log.info("[ripe/ping] no data for %s — skipping", date_partition)
         return 0
 
-    # -----------------------------------------------------------------------
-    # Step 1: Firmware-aware RTT resolution
-    # -----------------------------------------------------------------------
-    # avg/min/max are present in all firmware versions but may be null in
-    # newer firmware when packet loss is 100%.  We fall back to computing
-    # them from the 'result' array in that case.
-    # -----------------------------------------------------------------------
-    avg_arr, min_arr, max_arr = _compute_rtt_from_result(F.col("result"))
+    # Packet counts
+    pkt_sent = F.col("sent").cast(DoubleType())
+    pkt_rcvd = F.col("rcvd").cast(DoubleType())
 
-    df = (
+    # RTT stddev from the result array
+    valid_rtts = F.filter(F.col("result"), lambda r: r["rtt"].isNotNull())
+    rtt_values = F.transform(valid_rtts, lambda r: r["rtt"])
+    rtt_count  = F.size(rtt_values)
+
+    silver = (
         raw
-        .withColumn("rtt_avg_ms", F.coalesce(F.col("avg"), avg_arr))
-        .withColumn("rtt_min_ms", F.coalesce(F.col("min"), min_arr))
-        .withColumn("rtt_max_ms", F.coalesce(F.col("max"), max_arr))
-    )
-
-    # -----------------------------------------------------------------------
-    # Step 2: Packet loss calculation
-    # -----------------------------------------------------------------------
-    # packet_loss = 1 - (rcvd / sent), clipped to [0.0, 1.0].
-    # When sent is null or 0 we use null to avoid division by zero and
-    # mark these as data quality issues.
-    # -----------------------------------------------------------------------
-    df = (
-        df
-        .withColumn("pkt_sent", F.col("sent").cast(DoubleType()))
-        .withColumn("pkt_rcvd", F.col("rcvd").cast(DoubleType()))
-        .withColumn(
-            "packet_loss",
+        # Measurement identity
+        .withColumn("msm_id",       F.col("msm_id").cast(IntegerType()))
+        .withColumn("probe_id_hash", F.sha2(F.col("prb_id").cast(StringType()), 256))
+        .withColumn("country_code", F.upper(F.col("country_code")))
+        .withColumn("ts_utc",       F.to_timestamp(F.col("timestamp").cast(LongType())))
+        .withColumn("timestamp",    F.col("timestamp").cast(LongType()))
+        # Measurement metadata
+        .withColumn("fw",           F.col("fw").cast(IntegerType()))
+        .withColumn("mver",         F.col("mver"))
+        .withColumn("af",           F.col("af").cast(IntegerType()))   # 4=IPv4, 6=IPv6
+        .withColumn("proto",        F.col("proto"))
+        .withColumn("dst_name",     F.col("dst_name"))
+        .withColumn("step",         F.col("step").cast(IntegerType()))
+        # RTT metrics — all firmware >= 5000 has these at top level
+        .withColumn("rtt_avg_ms",   F.col("avg").cast(DoubleType()))
+        .withColumn("rtt_min_ms",   F.col("min").cast(DoubleType()))
+        .withColumn("rtt_max_ms",   F.col("max").cast(DoubleType()))
+        # Packet counts
+        .withColumn("pkt_sent",     pkt_sent)
+        .withColumn("pkt_rcvd",     pkt_rcvd)
+        .withColumn("pkt_dup",      F.col("dup").cast(IntegerType()))
+        # Derived: packet loss
+        .withColumn("packet_loss",
             F.when(
-                (F.col("pkt_sent").isNotNull()) & (F.col("pkt_sent") > 0),
-                F.greatest(
-                    F.lit(0.0),
-                    F.least(
-                        F.lit(1.0),
-                        F.lit(1.0) - (F.col("pkt_rcvd") / F.col("pkt_sent"))
-                    )
-                )
+                pkt_sent.isNotNull() & (pkt_sent > 0),
+                F.greatest(F.lit(0.0),
+                           F.least(F.lit(1.0),
+                                   F.lit(1.0) - (pkt_rcvd / pkt_sent)))
             ).otherwise(F.lit(None).cast(DoubleType()))
         )
-    )
-
-    # -----------------------------------------------------------------------
-    # Step 3: ICMP rate-limiting flag
-    # -----------------------------------------------------------------------
-    # If packets were sent but nothing was received AND avg RTT is null, the
-    # destination host is almost certainly rate-limiting ICMP rather than
-    # being genuinely offline.  We flag this so the Gold layer can apply a
-    # lower confidence weight when scoring this as an outage.
-    # -----------------------------------------------------------------------
-    df = df.withColumn(
-        "icmp_filtered",
-        (
-            (F.col("pkt_sent") > 0) &
-            (F.col("pkt_rcvd") == 0) &
-            F.col("rtt_avg_ms").isNull()
+        # Derived: ICMP rate-limit flag
+        .withColumn("icmp_filtered",
+            (pkt_sent > 0) & (pkt_rcvd == 0) & F.col("avg").isNull()
         )
-    )
-
-    # -----------------------------------------------------------------------
-    # Step 4: Error flag (firmware >= 5000)
-    # -----------------------------------------------------------------------
-    df = df.withColumn("has_error", F.col("err").isNotNull())
-
-    # -----------------------------------------------------------------------
-    # Step 5: PII anonymisation
-    # -----------------------------------------------------------------------
-    # Hash probe_id with SHA-256 (deterministic, irreversible).
-    # Drop source IP entirely.
-    # -----------------------------------------------------------------------
-    df = (
-        df
-        .withColumn(
-            "probe_id_hash",
-            F.sha2(F.col("prb_id").cast(StringType()), 256)
-        )
-        .drop("prb_id", "from", "dst_addr")  # remove PII
-    )
-
-    # -----------------------------------------------------------------------
-    # Step 6: Timestamp enrichment
-    # -----------------------------------------------------------------------
-    df = df.withColumn("ts_utc", F.to_timestamp(F.col("timestamp")))
-
-    # -----------------------------------------------------------------------
-    # Step 7: Firmware generation flag
-    # -----------------------------------------------------------------------
-    df = df.withColumn(
-        "fw_gen",
-        F.when(F.col("fw") >= 5000, F.lit("v5")).otherwise(F.lit("v4"))
-    )
-
-    # -----------------------------------------------------------------------
-    # Step 8: Select final Silver columns
-    # -----------------------------------------------------------------------
-    silver = (
-        df.select(
-            "msm_id",
-            "probe_id_hash",
-            "country_code",
-            "ts_utc",
-            "timestamp",
-            "proto",
-            "dst_name",
-            "fw",
-            "fw_gen",
-            "mver",
-            "rtt_avg_ms",
-            "rtt_min_ms",
-            "rtt_max_ms",
-            "pkt_sent",
-            "pkt_rcvd",
-            "packet_loss",
-            "icmp_filtered",
-            "has_error",
-            "err",
-        )
-        .filter(F.col("country_code").isNotNull())  # drop unmapped probes
+        # Derived: per-packet RTT count from result array
+        .withColumn("pkt_result_count", rtt_count)
+        # Drop PII columns
+        .drop("prb_id", "src_addr", "from", "avg", "min", "max",
+              "sent", "rcvd", "dup", "result", "dst_addr",
+              "lts", "size", "ttl", "msm_name", "type")
+        # Only keep records with a known country
+        .filter(F.col("country_code").isNotNull())
+        .filter(F.col("ts_utc").isNotNull())
         .dropDuplicates(["msm_id", "probe_id_hash", "timestamp"])
-        # Zero-padded string partitions: month=06 not month=6
+        # Zero-padded string partitions
         .withColumn("year",  F.date_format("ts_utc", "yyyy"))
         .withColumn("month", F.date_format("ts_utc", "MM"))
         .withColumn("day",   F.date_format("ts_utc", "dd"))
     )
 
-    # Write to base path — partitionBy adds year=/month=/day= itself.
-    # Including date_partition in the path AND using partitionBy causes double-nesting.
     dst = f"s3a://{SILVER_BUCKET}/ripe/ping"
     log.info("[ripe/ping] writing Silver Parquet → %s", dst)
 
@@ -308,56 +208,40 @@ def process_ping(spark: SparkSession, date_partition: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Partition discovery — uses the Hadoop FileSystem API already in the JVM
+# Partition discovery via Hadoop FileSystem API (no boto3 needed)
 # ---------------------------------------------------------------------------
 
-def _discover_partitions(spark: "SparkSession") -> list[str]:
-    """
-    List every year=/month=/day= partition under s3a://bronze/ripe/ping/
-    via the Hadoop FileSystem API (spark._jvm). No boto3 required.
-    """
+def _discover_partitions(spark: SparkSession) -> list[str]:
+    """List all year=/month=/day= partitions under s3a://bronze/ripe/ping/."""
     jvm  = spark._jvm
-    jsc  = spark._jsc.sc()
-    conf = jsc.hadoopConfiguration()
-
+    conf = spark._jsc.sc().hadoopConfiguration()
     Path = jvm.org.apache.hadoop.fs.Path
-    base = f"s3a://{BRONZE_BUCKET}/ripe/ping"
-    base_path = Path(base)
-    fs = base_path.getFileSystem(conf)
+    base = Path(f"s3a://{BRONZE_BUCKET}/ripe/ping")
+    fs   = base.getFileSystem(conf)
 
     day_partitions: set[str] = set()
     try:
-        for year_status in fs.listStatus(base_path):
-            if not year_status.isDirectory():
-                continue
-            year_path = year_status.getPath()
-            for month_status in fs.listStatus(year_path):
-                if not month_status.isDirectory():
-                    continue
-                month_path = month_status.getPath()
-                for day_status in fs.listStatus(month_path):
-                    if not day_status.isDirectory():
-                        continue
-                    day_path = day_status.getPath()
-                    partition = (
-                        f"{year_path.getName()}/"
-                        f"{month_path.getName()}/"
-                        f"{day_path.getName()}"
+        for y in fs.listStatus(base):
+            if not y.isDirectory(): continue
+            yp = y.getPath()
+            for m in fs.listStatus(yp):
+                if not m.isDirectory(): continue
+                mp = m.getPath()
+                for d in fs.listStatus(mp):
+                    if not d.isDirectory(): continue
+                    day_partitions.add(
+                        f"{yp.getName()}/{mp.getName()}/{d.getPath().getName()}"
                     )
-                    day_partitions.add(partition)
     except Exception as exc:
-        log.warning("Could not list s3a://%s/ripe/ping/: %s", BRONZE_BUCKET, exc)
+        log.warning("Could not list bronze/ripe/ping: %s", exc)
 
     return sorted(day_partitions)
 
 
 def _date_partitions_from_range(start: datetime, end: datetime) -> list[str]:
-    parts = []
-    cursor = start.replace(hour=0, minute=0, second=0, microsecond=0)
+    parts, cursor = [], start.replace(hour=0, minute=0, second=0, microsecond=0)
     while cursor < end:
-        parts.append(
-            f"year={cursor.year:04d}/month={cursor.month:02d}/day={cursor.day:02d}"
-        )
+        parts.append(f"year={cursor.year:04d}/month={cursor.month:02d}/day={cursor.day:02d}")
         cursor += timedelta(days=1)
     return parts
 
@@ -367,26 +251,20 @@ def _date_partitions_from_range(start: datetime, end: datetime) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="RIPE Silver Layer Batch Job")
-    parser.add_argument(
-        "--start", default=None,
-        help="Start date inclusive (YYYY-MM-DD). Omit to auto-discover all bronze partitions.",
-    )
-    parser.add_argument(
-        "--end", default=None,
-        help="End date exclusive (YYYY-MM-DD). Omit to auto-discover all bronze partitions.",
-    )
-    return parser.parse_args()
+    p = argparse.ArgumentParser(description="RIPE Silver Layer Batch Job")
+    p.add_argument("--start", default=None,
+                   help="Start date inclusive (YYYY-MM-DD). Omit to auto-discover.")
+    p.add_argument("--end",   default=None,
+                   help="End date exclusive (YYYY-MM-DD). Omit to auto-discover.")
+    return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-
-    # Spark must be running before we can use the Hadoop FS API for discovery
     spark = build_spark()
 
     if args.start is None and args.end is None:
-        log.info("No date range specified — auto-discovering partitions from s3a://%s/ripe/ping/", BRONZE_BUCKET)
+        log.info("Auto-discovering partitions from s3a://%s/ripe/ping/", BRONZE_BUCKET)
         partitions = _discover_partitions(spark)
         if not partitions:
             log.warning("No RIPE bronze partitions found — has ripe-ingester written any data yet?")
@@ -396,7 +274,7 @@ def main() -> None:
                  len(partitions), partitions[0], partitions[-1])
     else:
         if args.start is None or args.end is None:
-            log.error("Provide both --start and --end, or neither (auto-discover).")
+            log.error("Provide both --start and --end, or neither.")
             spark.stop()
             sys.exit(1)
         start = datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
@@ -406,19 +284,16 @@ def main() -> None:
             spark.stop()
             sys.exit(1)
         partitions = _date_partitions_from_range(start, end)
-        log.info("Date range specified: %d partition(s)", len(partitions))
+        log.info("Date range: %d partition(s)", len(partitions))
 
-    log.info("RIPE Silver job: %d day(s)", len(partitions))
     total = 0
-
     for date_part in partitions:
-        log.info("=== Processing partition: %s ===", date_part)
+        log.info("=== Processing %s ===", date_part)
         total += process_ping(spark, date_part)
 
     log.info("=" * 60)
     log.info("RIPE Silver complete. Total records: %d", total)
     log.info("=" * 60)
-
     spark.stop()
 
 
