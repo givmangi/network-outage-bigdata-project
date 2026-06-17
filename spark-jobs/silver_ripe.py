@@ -283,12 +283,15 @@ def process_ping(spark: SparkSession, date_partition: str) -> int:
         )
         .filter(F.col("country_code").isNotNull())  # drop unmapped probes
         .dropDuplicates(["msm_id", "probe_id_hash", "timestamp"])
-        .withColumn("year",  F.year("ts_utc"))
-        .withColumn("month", F.month("ts_utc"))
-        .withColumn("day",   F.dayofmonth("ts_utc"))
+        # Zero-padded string partitions: month=06 not month=6
+        .withColumn("year",  F.date_format("ts_utc", "yyyy"))
+        .withColumn("month", F.date_format("ts_utc", "MM"))
+        .withColumn("day",   F.date_format("ts_utc", "dd"))
     )
 
-    dst = f"s3a://{SILVER_BUCKET}/ripe/ping/{date_partition}"
+    # Write to base path — partitionBy adds year=/month=/day= itself.
+    # Including date_partition in the path AND using partitionBy causes double-nesting.
+    dst = f"s3a://{SILVER_BUCKET}/ripe/ping"
     log.info("[ripe/ping] writing Silver Parquet → %s", dst)
 
     count = silver.count()
