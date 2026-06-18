@@ -1,81 +1,56 @@
-"""
-ripe_recon.py — RIPE Atlas Probe Discovery
-===========================================
-Generates a mapping of RIPE Atlas Probe IDs to their physical countries.
-This is required because RIPE Atlas built-in measurements are global; 
-we must filter the incoming data stream by probe ID to isolate our 15 countries.
-"""
-
 import json
 import requests
 import os
-from dotenv import load_dotenv, find_dotenv
+from dotenv import load_dotenv
 
-# find_dotenv() automatically searches parent folders until it finds the .env!
-load_dotenv(find_dotenv())
-
-# Pull the string from .env, and use .split() to turn it into a Python list
-# We keep your 15 countries as a fallback just in case the .env is missing!
+# Load the target countries from your .env file
+load_dotenv()
 env_string = os.environ.get("TARGET_COUNTRIES", "IT MM IN PK UA RU PS SY IR TR BD NG US DE GB")
 COUNTRIES = env_string.split()
 
-# These are the RIPE Atlas Built-In Measurement IDs for IPv4 Pings 
-# to the 13 Global DNS Root Servers (A through M). 
-# We will use these in the next step, but it's good to document them here.
-ROOT_PING_MEASUREMENT_IDS = [
-    2009, # A-root
-    2010, # B-root
-    2011, # C-root
-    2012, # D-root
-    2013, # E-root
-    2004, # F-root
-    2014, # G-root
-    2015, # H-root
-    2005, # I-root
-    2016, # J-root
-    2001, # K-root
-    2008, # L-root
-    2006, # M-root
-]
+PROBES_URL = "https://atlas.ripe.net/api/v2/probes/"
 
-def fetch_probe_mapping():
-    probe_mapping = {}
-    
-    print("Starting RIPE Atlas probe reconnaissance...")
+def build_probe_mapping():
+    mapping = {}
+    print(f"Fetching RIPE probes for {len(COUNTRIES)} countries...")
     
     for country in COUNTRIES:
-        print(f"Fetching active probes for {country}...")
-        url = "https://atlas.ripe.net/api/v2/probes/"
+        # We only want active (status=1), public probes
+        params = {"country_code": country, "status": 1, "is_public": "true"}
+        url = PROBES_URL
         
-        # We only want probes that are currently online (status=1) and public
-        params = {
-            "country_code": country,
-            "status": 1,
-            "is_public": "true"
-        }
-        
-        while url:
-            resp = requests.get(url, params=params, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-            
-            # Map the probe ID to its country code
-            for probe in data.get("results", []):
-                probe_id = str(probe["id"])
-                probe_mapping[probe_id] = country
+        try:
+            # The RIPE API limits results per page, so we loop through the 'next' pages
+            while url:
+                resp = requests.get(url, params=params, timeout=10)
+                resp.raise_for_status()
+                data = resp.json()
                 
-            # Handle RIPE Atlas API pagination
-            url = data.get("next")
-            params = None  # The 'next' URL already includes the query parameters
+                for probe in data.get("results", []):
+                    probe_id = str(probe["id"])
+                    asn = probe.get("asn_v4") # Grab the IPv4 ASN!
+                    
+                    # Only map probes that actually belong to a known ASN
+                    if asn:
+                        mapping[probe_id] = {
+                            "country_code": country,
+                            "asn": asn
+                        }
+                
+                url = data.get("next")
+                params = None # The 'next' URL already contains the parameters
+                
+        except Exception as e:
+            print(f"  -> Failed to fetch probes for {country}: {e}")
             
-    print(f"\nSuccess! Found {len(probe_mapping)} total active probes across the 15 countries.")
-    
-    # Save the mapping to a JSON file
-    output_file = "ripe_probe_mapping.json"
-    with open(output_file, "w", encoding="utf-8") as f:
-        json.dump(probe_mapping, f, indent=2)
-        
-    print(f"Saved mapping to {output_file}. We are ready for ingestion.")
+    print(f"\nSuccessfully mapped {len(mapping)} physical probes with ASNs!")
+    return mapping
 
 if __name__ == "__main__":
-    fetch_probe_mapping()
+    mapping = build_probe_mapping()
+    
+    # Save it with an indent so it's easy for humans to read
+    with open("ripe_probe_mapping.json", "w", encoding="utf-8") as f:
+        json.dump(mapping, f, indent=2)
+        
+    print("Saved mapping to ripe_probe_mapping.json.")

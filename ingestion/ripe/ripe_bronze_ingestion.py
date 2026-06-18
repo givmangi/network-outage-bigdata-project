@@ -113,7 +113,15 @@ def fetch_and_filter_results(msm_id: int, from_ts: int, until_ts: int, probe_map
             for record in data:
                 probe_id = str(record.get("prb_id"))
                 if probe_id in probe_mapping:
-                    record["country_code"] = probe_mapping[probe_id]
+                    mapping_data = probe_mapping[probe_id]
+                    
+                    # Safely handle both the new dict format and the old string format
+                    if isinstance(mapping_data, dict):
+                        record["country_code"] = mapping_data["country_code"]
+                        record["asn"] = mapping_data["asn"]
+                    else:
+                        record["country_code"] = mapping_data
+                        
                     kept += 1
                     yield record
                     

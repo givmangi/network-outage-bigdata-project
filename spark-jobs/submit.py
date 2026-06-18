@@ -33,7 +33,8 @@ S3_SECRET   = os.environ.get("S3_SECRET_KEY", "")
 
 BASE_PACKAGES = (
     "org.apache.hadoop:hadoop-aws:3.3.4,"
-    "com.amazonaws:aws-java-sdk-bundle:1.12.262"
+    "com.amazonaws:aws-java-sdk-bundle:1.12.262,"
+    "org.postgresql:postgresql:42.6.0" # <--- ADDED THIS LINE
 )
 STREAM_PACKAGES = (
     BASE_PACKAGES
@@ -67,6 +68,11 @@ JOBS = {
         "packages": STREAM_PACKAGES,
         "script":   "/opt/spark-job/silver_streaming.py",
         "confs":    COMMON_CONFS + ["spark.streaming.stopGracefullyOnShutdown=true"],
+    },
+    "gold": {   # <--- ADDED THIS BLOCK
+        "packages": BASE_PACKAGES,
+        "script":   "/opt/spark-job/gold_batch.py",
+        "confs":    COMMON_CONFS,
     },
 }
 

@@ -106,6 +106,7 @@ RIPE_PING_SCHEMA = StructType([
     StructField("dup",          IntegerType(),              True),
     StructField("result",       ArrayType(PING_RESULT_ITEM), True),
     StructField("country_code", StringType(),               True),
+    StructField("asn",          IntegerType(),              True), # <--- ADDED THIS!
     StructField("err",          StringType(),               True),
 ])
 

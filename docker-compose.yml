@@ -283,11 +283,36 @@ services:
       S3_BUCKET_BRONZE:        "bronze"
       S3_BUCKET_SILVER:        "silver"
       MICRO_BATCH_INTERVAL:    "${MICRO_BATCH_INTERVAL:-2 minutes}"
+      TIMESCALEDB_USER:        "${TIMESCALEDB_USER}"
+      TIMESCALEDB_PASSWORD:    "${TIMESCALEDB_PASSWORD}"
     volumes:
       - ./spark-jobs:/opt/spark-job
     entrypoint: ["python3", "/opt/spark-job/submit.py", "stream"]
     networks:
       - ioda-net
+
+  # =========================================================================
+  # GOLD LAYER: TimescaleDB (Time-series optimized PostgreSQL)
+  # =========================================================================
+  timescaledb:
+    image: timescale/timescaledb:latest-pg15
+    container_name: ioda-timescaledb
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${TIMESCALEDB_USER}
+      POSTGRES_PASSWORD: ${TIMESCALEDB_PASSWORD}
+      POSTGRES_DB: outage_intelligence
+    volumes:
+      - timescaledb-data:/var/lib/postgresql/data
+    networks:
+      - ioda-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d outage_intelligence"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 # -------------------------------------------------------------------------
 # Named volumes
@@ -296,6 +321,8 @@ volumes:
   kafka-data:
     driver: local
   minio-data:
+    driver: local
+  timescaledb-data:
     driver: local
 
 # -------------------------------------------------------------------------

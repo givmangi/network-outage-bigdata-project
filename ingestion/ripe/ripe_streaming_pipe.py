@@ -189,7 +189,14 @@ def on_message(ws, message):
             
             # Filter by our 15 countries using the mapping we made!
             if probe_id in probe_mapping:
-                payload["country_code"] = probe_mapping[probe_id]
+                mapping_data = probe_mapping[probe_id]
+                
+                # Safely handle both the new dict format and the old string format
+                if isinstance(mapping_data, dict):
+                    payload["country_code"] = mapping_data["country_code"]
+                    payload["asn"] = mapping_data["asn"]
+                else:
+                    payload["country_code"] = mapping_data
                 
                 # 1. Send immediately to Kafka
                 if producer:
