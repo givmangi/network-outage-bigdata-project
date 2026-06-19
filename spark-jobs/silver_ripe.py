@@ -145,6 +145,16 @@ def process_ping(spark: SparkSession, date_partition: str) -> int:
         .withColumn("msm_id",       F.col("msm_id").cast(IntegerType()))
         .withColumn("probe_id_hash", F.sha2(F.col("prb_id").cast(StringType()), 256))
         .withColumn("country_code", F.upper(F.col("country_code")))
+        # asn: injected by the bronze ingester (ripe_bronze_ingestion.py /
+        # ripe_streaming_pipe.py) from ripe_probe_mapping.json. Explicitly
+        # cast here so the Parquet schema is always IntegerType regardless of
+        # how Spark inferred the raw JSON field. Rows that pre-date the fix
+        # (no asn in bronze) will land as NULL and are filtered out by
+        # gold_batch.py's .filter(F.col("asn").isNotNull()).
+        .withColumn("asn",
+            F.when(F.col("asn").isNotNull(), F.col("asn").cast(IntegerType()))
+             .otherwise(F.lit(None).cast(IntegerType()))
+        )
         .withColumn("ts_utc",       F.to_timestamp(F.col("timestamp").cast(LongType())))
         .withColumn("timestamp",    F.col("timestamp").cast(LongType()))
         # Measurement metadata
@@ -294,6 +304,38 @@ def main() -> None:
     log.info("=" * 60)
     log.info("RIPE Silver complete. Total records: %d", total)
     log.info("=" * 60)
+
+    # =========================================================================
+    # --- DIAGNOSTIC CHECK STARTS HERE ---
+    # =========================================================================
+    print("\n" + "="*50)
+    print("🔍 DIAGNOSTIC CHECK: SILVER DATA")
+    print("="*50)
+
+    # 1. Read the Silver data (using the script's SILVER_BUCKET variable)
+    df = spark.read.parquet(f"s3a://{SILVER_BUCKET}/ripe/ping/year=*/month=*/day=*")
+
+    # 2. Print the schema to ensure 'asn' exists
+    print("\n--- SCHEMA ---")
+    df.printSchema()
+
+    # 3. Show a preview of the data
+    print("\n--- DATA PREVIEW ---")
+    df.select("asn", "country_code", "rtt_avg_ms").show(20)
+
+    # 4. Count the nulls vs non-nulls
+    rows_with_asn = df.filter(df.asn.isNotNull()).count()
+    rows_without_asn = df.filter(df.asn.isNull()).count()
+
+    print("\n--- NULL CHECK ---")
+    print(f"Rows WITH asn:    {rows_with_asn}")
+    print(f"Rows WITHOUT asn: {rows_without_asn}")
+
+    print("="*50 + "\n")
+    # =========================================================================
+    # --- DIAGNOSTIC CHECK ENDS HERE ---
+    # =========================================================================
+
     spark.stop()
 
 

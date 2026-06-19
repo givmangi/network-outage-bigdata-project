@@ -314,6 +314,42 @@ services:
       timeout: 5s
       retries: 5
 
+
+  spark-gold:
+    image: apache/spark:3.5.1
+    container_name: spark-gold
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+      timescaledb:
+        condition: service_healthy
+    environment:
+      S3_ENDPOINT_URL:      "http://minio:9000"
+      S3_ACCESS_KEY:        "${MINIO_ROOT_USER}"
+      S3_SECRET_KEY:        "${MINIO_ROOT_PASSWORD}"
+      S3_BUCKET_SILVER:     "silver"
+      TIMESCALEDB_USER:     "${TIMESCALEDB_USER}"
+      TIMESCALEDB_PASSWORD: "${TIMESCALEDB_PASSWORD}"
+    volumes:
+      - ./spark-jobs:/opt/spark-job
+    entrypoint: ["python3", "/opt/spark-job/submit.py", "gold"]
+    command: []
+    networks:
+      - ioda-net
+
+
+  jupyter:
+    image: jupyter/scipy-notebook:latest
+    container_name: ioda-jupyter
+    restart: unless-stopped
+    ports:
+      - "8888:8888"
+    environment:
+      JUPYTER_ENABLE_LAB: "yes"
+    volumes:
+      - ./notebooks:/home/jovyan/work
+    networks:
+      - ioda-net
 # -------------------------------------------------------------------------
 # Named volumes
 # -------------------------------------------------------------------------

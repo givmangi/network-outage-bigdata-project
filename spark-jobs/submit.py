@@ -74,6 +74,11 @@ JOBS = {
         "script":   "/opt/spark-job/gold_batch.py",
         "confs":    COMMON_CONFS,
     },
+    "diag": {
+    "packages": BASE_PACKAGES,
+    "script":   "/opt/spark-job/gold_diagnostic.py",
+    "confs":    COMMON_CONFS,
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -91,6 +96,7 @@ job      = JOBS[job_name]
 # Build spark-submit command
 # ---------------------------------------------------------------------------
 cmd = ["/opt/spark/bin/spark-submit", "--master", "local[*]",
+        "--driver-memory", "2g",
        "--packages", job["packages"]]
 
 for conf in job["confs"]:

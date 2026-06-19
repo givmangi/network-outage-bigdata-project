@@ -58,6 +58,9 @@ def main():
         print("================================================================")
         df = df.withColumn("asn", F.lit(None).cast("integer"))
 
+    # Filter out RIPE sentinel value for failed measurements (-1.0 means no response)
+    df = df.filter(F.col("rtt_avg_ms") > 0)
+
     print(">>> Aggregating into hourly baselines...")
     baselines = (
         df
