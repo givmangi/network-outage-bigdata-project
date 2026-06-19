@@ -474,18 +474,49 @@ def main() -> None:
     # Spark must be running before we can use the Hadoop FS API for discovery
     spark = build_spark()
 
-    # Build partition list: auto-discover from bucket, or use explicit range
+    PROCESSORS = {
+        "alerts":  process_alerts,
+        "events":  process_events,
+        "signals": process_signals,
+    }
+
+    # ---------------------------------------------------------------------------
+    # Build per-dataset partition lists
+    # ---------------------------------------------------------------------------
     if args.start is None and args.end is None:
-        log.info("No date range specified — auto-discovering partitions from s3a://%s/ioda/", BRONZE_BUCKET)
-        reference_layer = args.datasets[0]
-        partitions = _discover_partitions(spark, reference_layer)
-        if not partitions:
-            log.error("No bronze partitions found in s3a://%s/ioda/%s/. "
-                      "Has the ingester written any data yet?", BRONZE_BUCKET, reference_layer)
+        # Auto-discover: query each layer's bronze folder independently.
+        # A layer whose folder doesn't exist yet (e.g. alerts before any outage
+        # has been ingested) gets an empty list and is skipped with a WARNING —
+        # it does NOT block the other layers from running.
+        log.info(
+            "No date range specified — auto-discovering partitions per dataset "
+            "from s3a://%s/ioda/", BRONZE_BUCKET,
+        )
+        dataset_partitions: dict[str, list[str]] = {}
+        for layer in args.datasets:
+            parts = _discover_partitions(spark, layer)
+            if parts:
+                log.info(
+                    "[%s] discovered %d partition(s): %s … %s",
+                    layer, len(parts), parts[0], parts[-1],
+                )
+            else:
+                log.warning(
+                    "[%s] no bronze partitions found in s3a://%s/ioda/%s/ — "
+                    "skipping (folder may not exist yet).",
+                    layer, BRONZE_BUCKET, layer,
+                )
+            dataset_partitions[layer] = parts
+
+        # Only truly fatal if every requested dataset is empty
+        if all(len(p) == 0 for p in dataset_partitions.values()):
+            log.error(
+                "No bronze partitions found for any of %s. "
+                "Has the ingester written any data yet?", args.datasets,
+            )
             spark.stop()
             sys.exit(1)
-        log.info("Discovered %d partition(s): %s … %s",
-                 len(partitions), partitions[0], partitions[-1])
+
     else:
         if args.start is None or args.end is None:
             log.error("Provide both --start and --end, or neither (auto-discover).")
@@ -497,27 +528,24 @@ def main() -> None:
             log.error("--start must be before --end")
             spark.stop()
             sys.exit(1)
-        partitions = _date_partitions_from_range(start, end)
-        log.info("Date range specified: %d partition(s)", len(partitions))
+        shared_partitions = _date_partitions_from_range(start, end)
+        log.info("Date range specified: %d partition(s)", len(shared_partitions))
+        # Explicit range: all datasets share the same date window.
+        # process_* already handle missing/empty files gracefully (return 0).
+        dataset_partitions = {layer: shared_partitions for layer in args.datasets}
 
-    log.info("IODA Silver job: %d day(s) × datasets=%s", len(partitions), args.datasets)
-
+    # ---------------------------------------------------------------------------
+    # Process each dataset over its own partition list
+    # ---------------------------------------------------------------------------
     totals: dict[str, int] = {}
 
-    for date_part in partitions:
-        log.info("=== Processing partition: %s ===", date_part)
-
-        if "alerts" in args.datasets:
-            n = process_alerts(spark, date_part)
-            totals["alerts"] = totals.get("alerts", 0) + n
-
-        if "events" in args.datasets:
-            n = process_events(spark, date_part)
-            totals["events"] = totals.get("events", 0) + n
-
-        if "signals" in args.datasets:
-            n = process_signals(spark, date_part)
-            totals["signals"] = totals.get("signals", 0) + n
+    for layer, partitions in dataset_partitions.items():
+        if not partitions:
+            continue  # already warned above
+        log.info("=== [%s] processing %d partition(s) ===", layer, len(partitions))
+        for date_part in partitions:
+            n = PROCESSORS[layer](spark, date_part)
+            totals[layer] = totals.get(layer, 0) + n
 
     log.info("=" * 60)
     log.info("IODA Silver complete. Record totals: %s", totals)
