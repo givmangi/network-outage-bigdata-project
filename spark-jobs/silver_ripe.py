@@ -305,37 +305,6 @@ def main() -> None:
     log.info("RIPE Silver complete. Total records: %d", total)
     log.info("=" * 60)
 
-    # =========================================================================
-    # --- DIAGNOSTIC CHECK STARTS HERE ---
-    # =========================================================================
-    print("\n" + "="*50)
-    print("🔍 DIAGNOSTIC CHECK: SILVER DATA")
-    print("="*50)
-
-    # 1. Read the Silver data (using the script's SILVER_BUCKET variable)
-    df = spark.read.parquet(f"s3a://{SILVER_BUCKET}/ripe/ping/year=*/month=*/day=*")
-
-    # 2. Print the schema to ensure 'asn' exists
-    print("\n--- SCHEMA ---")
-    df.printSchema()
-
-    # 3. Show a preview of the data
-    print("\n--- DATA PREVIEW ---")
-    df.select("asn", "country_code", "rtt_avg_ms").show(20)
-
-    # 4. Count the nulls vs non-nulls
-    rows_with_asn = df.filter(df.asn.isNotNull()).count()
-    rows_without_asn = df.filter(df.asn.isNull()).count()
-
-    print("\n--- NULL CHECK ---")
-    print(f"Rows WITH asn:    {rows_with_asn}")
-    print(f"Rows WITHOUT asn: {rows_without_asn}")
-
-    print("="*50 + "\n")
-    # =========================================================================
-    # --- DIAGNOSTIC CHECK ENDS HERE ---
-    # =========================================================================
-
     spark.stop()
 
 
