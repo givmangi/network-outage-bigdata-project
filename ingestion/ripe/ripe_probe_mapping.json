@@ -869,7 +869,7 @@
   },
   "1006191": {
     "country_code": "IT",
-    "asn": 14593
+    "asn": 1267
   },
   "1006219": {
     "country_code": "IT",
@@ -1451,10 +1451,6 @@
     "country_code": "IT",
     "asn": 31034
   },
-  "61198": {
-    "country_code": "MM",
-    "asn": 137955
-  },
   "62122": {
     "country_code": "MM",
     "asn": 136210
@@ -1550,6 +1546,10 @@
   "52159": {
     "country_code": "IN",
     "asn": 45184
+  },
+  "52835": {
+    "country_code": "IN",
+    "asn": 136902
   },
   "53099": {
     "country_code": "IN",
@@ -1686,10 +1686,6 @@
   "64876": {
     "country_code": "IN",
     "asn": 132423
-  },
-  "65493": {
-    "country_code": "IN",
-    "asn": 24560
   },
   "1000203": {
     "country_code": "IN",
@@ -1839,6 +1835,10 @@
     "country_code": "IN",
     "asn": 24560
   },
+  "1006101": {
+    "country_code": "IN",
+    "asn": 9829
+  },
   "1006146": {
     "country_code": "IN",
     "asn": 136342
@@ -1904,6 +1904,10 @@
     "asn": 133982
   },
   "1010346": {
+    "country_code": "IN",
+    "asn": 141995
+  },
+  "1010348": {
     "country_code": "IN",
     "asn": 141995
   },
@@ -2151,6 +2155,10 @@
     "country_code": "UA",
     "asn": 25521
   },
+  "4229": {
+    "country_code": "UA",
+    "asn": 44032
+  },
   "4472": {
     "country_code": "UA",
     "asn": 25514
@@ -2298,6 +2306,10 @@
   "12576": {
     "country_code": "UA",
     "asn": 35362
+  },
+  "12597": {
+    "country_code": "UA",
+    "asn": 202619
   },
   "12598": {
     "country_code": "UA",
@@ -2490,6 +2502,10 @@
   "54687": {
     "country_code": "UA",
     "asn": 44291
+  },
+  "54849": {
+    "country_code": "UA",
+    "asn": 31272
   },
   "55034": {
     "country_code": "UA",
@@ -2755,9 +2771,17 @@
     "country_code": "RU",
     "asn": 34602
   },
+  "1217": {
+    "country_code": "RU",
+    "asn": 5495
+  },
   "1316": {
     "country_code": "RU",
     "asn": 12668
+  },
+  "1340": {
+    "country_code": "RU",
+    "asn": 8334
   },
   "2274": {
     "country_code": "RU",
@@ -3295,6 +3319,10 @@
     "country_code": "RU",
     "asn": 12389
   },
+  "22711": {
+    "country_code": "RU",
+    "asn": 50512
+  },
   "22937": {
     "country_code": "RU",
     "asn": 49724
@@ -3439,10 +3467,6 @@
     "country_code": "RU",
     "asn": 42610
   },
-  "50571": {
-    "country_code": "RU",
-    "asn": 8369
-  },
   "50706": {
     "country_code": "RU",
     "asn": 29124
@@ -3499,10 +3523,6 @@
     "country_code": "RU",
     "asn": 49469
   },
-  "53288": {
-    "country_code": "RU",
-    "asn": 50158
-  },
   "53356": {
     "country_code": "RU",
     "asn": 31363
@@ -3558,10 +3578,6 @@
   "54228": {
     "country_code": "RU",
     "asn": 42668
-  },
-  "54229": {
-    "country_code": "RU",
-    "asn": 42610
   },
   "54238": {
     "country_code": "RU",
@@ -3674,10 +3690,6 @@
   "55804": {
     "country_code": "RU",
     "asn": 58061
-  },
-  "55820": {
-    "country_code": "RU",
-    "asn": 34757
   },
   "55846": {
     "country_code": "RU",
@@ -4071,10 +4083,6 @@
     "country_code": "RU",
     "asn": 12389
   },
-  "1009729": {
-    "country_code": "RU",
-    "asn": 12768
-  },
   "1009797": {
     "country_code": "RU",
     "asn": 210682
@@ -4086,6 +4094,10 @@
   "1009981": {
     "country_code": "RU",
     "asn": 209974
+  },
+  "1009987": {
+    "country_code": "RU",
+    "asn": 196949
   },
   "1010105": {
     "country_code": "RU",
@@ -4615,6 +4627,10 @@
     "country_code": "RU",
     "asn": 42024
   },
+  "1015855": {
+    "country_code": "RU",
+    "asn": 25513
+  },
   "1015897": {
     "country_code": "RU",
     "asn": 39134
@@ -5022,6 +5038,10 @@
   "1012161": {
     "country_code": "TR",
     "asn": 9121
+  },
+  "1012162": {
+    "country_code": "TR",
+    "asn": 47524
   },
   "1012990": {
     "country_code": "TR",
@@ -6683,6 +6703,10 @@
     "country_code": "US",
     "asn": 7922
   },
+  "19383": {
+    "country_code": "US",
+    "asn": 7922
+  },
   "19428": {
     "country_code": "US",
     "asn": 174
@@ -7358,10 +7382,6 @@
   "35557": {
     "country_code": "US",
     "asn": 395748
-  },
-  "35559": {
-    "country_code": "US",
-    "asn": 5650
   },
   "35561": {
     "country_code": "US",
@@ -8431,10 +8451,6 @@
     "country_code": "US",
     "asn": 7018
   },
-  "60587": {
-    "country_code": "US",
-    "asn": 7922
-  },
   "60605": {
     "country_code": "US",
     "asn": 21928
@@ -9115,10 +9131,6 @@
     "country_code": "US",
     "asn": 7922
   },
-  "65341": {
-    "country_code": "US",
-    "asn": 21928
-  },
   "65379": {
     "country_code": "US",
     "asn": 3356
@@ -9447,6 +9459,10 @@
     "country_code": "US",
     "asn": 7018
   },
+  "1002893": {
+    "country_code": "US",
+    "asn": 7029
+  },
   "1002928": {
     "country_code": "US",
     "asn": 22773
@@ -9514,6 +9530,10 @@
   "1003616": {
     "country_code": "US",
     "asn": 16803
+  },
+  "1003674": {
+    "country_code": "US",
+    "asn": 701
   },
   "1003711": {
     "country_code": "US",
@@ -9854,6 +9874,10 @@
   "1005787": {
     "country_code": "US",
     "asn": 11351
+  },
+  "1005809": {
+    "country_code": "US",
+    "asn": 14939
   },
   "1005815": {
     "country_code": "US",
@@ -10535,6 +10559,10 @@
     "country_code": "US",
     "asn": 7922
   },
+  "1010479": {
+    "country_code": "US",
+    "asn": 11117
+  },
   "1010495": {
     "country_code": "US",
     "asn": 7922
@@ -10650,6 +10678,10 @@
   "1010817": {
     "country_code": "US",
     "asn": 53471
+  },
+  "1010822": {
+    "country_code": "US",
+    "asn": 63473
   },
   "1010823": {
     "country_code": "US",
@@ -12635,6 +12667,10 @@
     "country_code": "US",
     "asn": 399804
   },
+  "1013600": {
+    "country_code": "US",
+    "asn": 54334
+  },
   "1013602": {
     "country_code": "US",
     "asn": 36352
@@ -12798,6 +12834,10 @@
   "1013957": {
     "country_code": "US",
     "asn": 7922
+  },
+  "1013967": {
+    "country_code": "US",
+    "asn": 14593
   },
   "1013987": {
     "country_code": "US",
@@ -13443,6 +13483,10 @@
     "country_code": "US",
     "asn": 5650
   },
+  "1015946": {
+    "country_code": "US",
+    "asn": 33566
+  },
   "1015947": {
     "country_code": "US",
     "asn": 36352
@@ -13711,6 +13755,10 @@
     "country_code": "DE",
     "asn": 9145
   },
+  "3333": {
+    "country_code": "DE",
+    "asn": 3320
+  },
   "3942": {
     "country_code": "DE",
     "asn": 3209
@@ -13763,6 +13811,10 @@
     "country_code": "DE",
     "asn": 39702
   },
+  "4526": {
+    "country_code": "DE",
+    "asn": 3320
+  },
   "4615": {
     "country_code": "DE",
     "asn": 35258
@@ -13774,10 +13826,6 @@
   "4740": {
     "country_code": "DE",
     "asn": 3320
-  },
-  "4741": {
-    "country_code": "DE",
-    "asn": 198570
   },
   "4781": {
     "country_code": "DE",
@@ -13998,10 +14046,6 @@
   "6967": {
     "country_code": "DE",
     "asn": 14061
-  },
-  "6979": {
-    "country_code": "DE",
-    "asn": 16552
   },
   "6999": {
     "country_code": "DE",
@@ -14319,6 +14363,10 @@
     "country_code": "DE",
     "asn": 3320
   },
+  "11135": {
+    "country_code": "DE",
+    "asn": 15763
+  },
   "11176": {
     "country_code": "DE",
     "asn": 8422
@@ -14542,6 +14590,10 @@
   "14803": {
     "country_code": "DE",
     "asn": 8881
+  },
+  "14894": {
+    "country_code": "DE",
+    "asn": 3320
   },
   "15024": {
     "country_code": "DE",
@@ -16191,6 +16243,10 @@
     "country_code": "DE",
     "asn": 3320
   },
+  "51593": {
+    "country_code": "DE",
+    "asn": 14593
+  },
   "51643": {
     "country_code": "DE",
     "asn": 9063
@@ -16483,6 +16539,10 @@
     "country_code": "DE",
     "asn": 8899
   },
+  "53888": {
+    "country_code": "DE",
+    "asn": 8899
+  },
   "54007": {
     "country_code": "DE",
     "asn": 3320
@@ -16517,7 +16577,7 @@
   },
   "54375": {
     "country_code": "DE",
-    "asn": 21263
+    "asn": 3320
   },
   "54477": {
     "country_code": "DE",
@@ -16578,6 +16638,10 @@
   "55012": {
     "country_code": "DE",
     "asn": 3320
+  },
+  "55029": {
+    "country_code": "DE",
+    "asn": 41998
   },
   "55064": {
     "country_code": "DE",
@@ -17391,10 +17455,6 @@
     "country_code": "DE",
     "asn": 3209
   },
-  "1002491": {
-    "country_code": "DE",
-    "asn": 3209
-  },
   "1002512": {
     "country_code": "DE",
     "asn": 3320
@@ -17787,6 +17847,10 @@
     "country_code": "DE",
     "asn": 3209
   },
+  "1005366": {
+    "country_code": "DE",
+    "asn": 202329
+  },
   "1005488": {
     "country_code": "DE",
     "asn": 34927
@@ -18071,10 +18135,6 @@
     "country_code": "DE",
     "asn": 41998
   },
-  "1006865": {
-    "country_code": "DE",
-    "asn": 198967
-  },
   "1006908": {
     "country_code": "DE",
     "asn": 200846
@@ -18191,6 +18251,10 @@
     "country_code": "DE",
     "asn": 212068
   },
+  "1007858": {
+    "country_code": "DE",
+    "asn": 3320
+  },
   "1007882": {
     "country_code": "DE",
     "asn": 24940
@@ -18306,6 +18370,10 @@
   "1008424": {
     "country_code": "DE",
     "asn": 200924
+  },
+  "1008432": {
+    "country_code": "DE",
+    "asn": 8560
   },
   "1008435": {
     "country_code": "DE",
@@ -18438,10 +18506,6 @@
   "1008935": {
     "country_code": "DE",
     "asn": 24940
-  },
-  "1009066": {
-    "country_code": "DE",
-    "asn": 3320
   },
   "1009082": {
     "country_code": "DE",
@@ -19195,6 +19259,10 @@
     "country_code": "DE",
     "asn": 24940
   },
+  "1012273": {
+    "country_code": "DE",
+    "asn": 15366
+  },
   "1012285": {
     "country_code": "DE",
     "asn": 3320
@@ -19310,6 +19378,10 @@
   "1013166": {
     "country_code": "DE",
     "asn": 8899
+  },
+  "1013168": {
+    "country_code": "DE",
+    "asn": 24940
   },
   "1013177": {
     "country_code": "DE",
@@ -19566,6 +19638,10 @@
   "1014041": {
     "country_code": "DE",
     "asn": 3209
+  },
+  "1014049": {
+    "country_code": "DE",
+    "asn": 8899
   },
   "1014050": {
     "country_code": "DE",
@@ -20071,6 +20147,10 @@
     "country_code": "DE",
     "asn": 3209
   },
+  "1015659": {
+    "country_code": "DE",
+    "asn": 6805
+  },
   "1015662": {
     "country_code": "DE",
     "asn": 63949
@@ -20203,10 +20283,6 @@
     "country_code": "DE",
     "asn": 14593
   },
-  "1016013": {
-    "country_code": "DE",
-    "asn": 31898
-  },
   "1016014": {
     "country_code": "DE",
     "asn": 42730
@@ -20234,6 +20310,10 @@
   "1016109": {
     "country_code": "DE",
     "asn": 20473
+  },
+  "1016111": {
+    "country_code": "DE",
+    "asn": 13335
   },
   "1016120": {
     "country_code": "DE",
@@ -20730,6 +20810,10 @@
   "13434": {
     "country_code": "GB",
     "asn": 20712
+  },
+  "13435": {
+    "country_code": "GB",
+    "asn": 13037
   },
   "13441": {
     "country_code": "GB",
@@ -21258,6 +21342,10 @@
   "52081": {
     "country_code": "GB",
     "asn": 212655
+  },
+  "52133": {
+    "country_code": "GB",
+    "asn": 5089
   },
   "52189": {
     "country_code": "GB",
@@ -21915,10 +22003,6 @@
     "country_code": "GB",
     "asn": 5089
   },
-  "1008180": {
-    "country_code": "GB",
-    "asn": 62217
-  },
   "1008181": {
     "country_code": "GB",
     "asn": 202422
@@ -22090,6 +22174,10 @@
   "1010664": {
     "country_code": "GB",
     "asn": 207841
+  },
+  "1010678": {
+    "country_code": "GB",
+    "asn": 8560
   },
   "1010690": {
     "country_code": "GB",
@@ -22350,10 +22438,6 @@
   "1013848": {
     "country_code": "GB",
     "asn": 20473
-  },
-  "1013865": {
-    "country_code": "GB",
-    "asn": 8560
   },
   "1013944": {
     "country_code": "GB",

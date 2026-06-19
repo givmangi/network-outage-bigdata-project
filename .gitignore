@@ -31,3 +31,5 @@ Thumbs.db
 spark-jobs/gem_silver.py
 spark-jobs/silver_job.py
 spark-jobs/submit_silver.sh
+
+dashboard/local_dev/
