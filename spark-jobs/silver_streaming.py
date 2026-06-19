@@ -232,9 +232,9 @@ def transform_ioda_alerts(raw_df):
         .withColumn("historical_value", F.col("historicalValue").cast(DoubleType()))
         .drop("from", "until", "entityType", "entityCode", "value", "historicalValue")
         .filter(F.col("entity_code").isNotNull())
-        .withColumn("year",  F.year("ts_from"))
-        .withColumn("month", F.month("ts_from"))
-        .withColumn("day",   F.dayofmonth("ts_from"))
+        .withColumn("year",  F.date_format("ts_from", "yyyy"))
+        .withColumn("month", F.date_format("ts_from", "MM"))
+        .withColumn("day",   F.date_format("ts_from", "dd"))
     )
 
 
@@ -250,9 +250,9 @@ def transform_ioda_events(raw_df):
         .withColumn("event_id",     F.col("id"))
         .drop("from", "until", "entityType", "entityCode", "id")
         .filter(F.col("entity_code").isNotNull())
-        .withColumn("year",  F.year("ts_from"))
-        .withColumn("month", F.month("ts_from"))
-        .withColumn("day",   F.dayofmonth("ts_from"))
+        .withColumn("year",  F.date_format("ts_from", "yyyy"))
+        .withColumn("month", F.date_format("ts_from", "MM"))
+        .withColumn("day",   F.date_format("ts_from", "dd"))
     )
 
 
@@ -267,9 +267,9 @@ def transform_ioda_signals(raw_df):
         .withColumn("collection_gap", F.col("value").isNull())
         .drop("entityType", "entityCode")
         .filter(F.col("entity_code").isNotNull())
-        .withColumn("year",  F.year("ts_utc"))
-        .withColumn("month", F.month("ts_utc"))
-        .withColumn("day",   F.dayofmonth("ts_utc"))
+        .withColumn("year",  F.date_format("ts_from", "yyyy"))
+        .withColumn("month", F.date_format("ts_from", "MM"))
+        .withColumn("day",   F.date_format("ts_from", "dd"))
     )
 
 
@@ -334,9 +334,9 @@ def transform_ripe_ping(raw_df):
         .withColumn("fw_gen",
                     F.when(F.col("fw") >= 5000, F.lit("v5")).otherwise(F.lit("v4")))
         .filter(F.col("country_code").isNotNull())
-        .withColumn("year",  F.year("ts_utc"))
-        .withColumn("month", F.month("ts_utc"))
-        .withColumn("day",   F.dayofmonth("ts_utc"))
+        .withColumn("year",  F.date_format("ts_from", "yyyy"))
+        .withColumn("month", F.date_format("ts_from", "MM"))
+        .withColumn("day",   F.date_format("ts_from", "dd"))
     )
 
 
