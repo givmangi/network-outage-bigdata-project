@@ -306,6 +306,7 @@ services:
       POSTGRES_DB: outage_intelligence
     volumes:
       - timescaledb-data:/var/lib/postgresql/data
+      - ./config/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - ioda-net
     healthcheck:
@@ -350,6 +351,26 @@ services:
       - ./notebooks:/home/jovyan/work
     networks:
       - ioda-net
+  
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: dashboard
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    environment:
+      TIMESCALEDB_HOST:     "timescaledb"
+      TIMESCALEDB_USER:     "${TIMESCALEDB_USER}"
+      TIMESCALEDB_PASSWORD: "${TIMESCALEDB_PASSWORD}"
+      TIMESCALEDB_DB:       "outage_intelligence"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    networks:
+      - ioda-net
+
 # -------------------------------------------------------------------------
 # Named volumes
 # -------------------------------------------------------------------------
