@@ -219,6 +219,23 @@ services:
   #   docker compose run --rm --no-deps spark-silver-ripe  --start 2026-05-28 --end 2026-06-04
   # =========================================================================
 
+  kafka-init:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "
+        kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic raw.ioda.alerts  --partitions 1 --replication-factor 1 &&
+        kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic raw.ioda.events  --partitions 1 --replication-factor 1 &&
+        kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic raw.ioda.signals --partitions 1 --replication-factor 1 &&
+        kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic raw.ripe.ping    --partitions 1 --replication-factor 1 &&
+        echo 'Kafka topics created.'
+      "
+    networks:
+      - outage-net
+
   spark-silver-ioda:
     image: apache/spark:3.5.1
     container_name: spark-silver-ioda
@@ -276,6 +293,8 @@ services:
       kafka:
         condition: service_healthy
       minio-init:
+        condition: service_completed_successfully
+      kafka-init:
         condition: service_completed_successfully
     environment:
       KAFKA_BOOTSTRAP_SERVERS: "kafka:29092"

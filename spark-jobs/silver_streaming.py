@@ -267,9 +267,9 @@ def transform_ioda_signals(raw_df):
         .withColumn("collection_gap", F.col("value").isNull())
         .drop("entityType", "entityCode")
         .filter(F.col("entity_code").isNotNull())
-        .withColumn("year",  F.date_format("ts_from", "yyyy"))
-        .withColumn("month", F.date_format("ts_from", "MM"))
-        .withColumn("day",   F.date_format("ts_from", "dd"))
+        .withColumn("year",  F.date_format("ts_utc", "yyyy"))
+        .withColumn("month", F.date_format("ts_utc", "MM"))
+        .withColumn("day",   F.date_format("ts_utc", "dd"))
     )
 
 
@@ -334,9 +334,9 @@ def transform_ripe_ping(raw_df):
         .withColumn("fw_gen",
                     F.when(F.col("fw") >= 5000, F.lit("v5")).otherwise(F.lit("v4")))
         .filter(F.col("country_code").isNotNull())
-        .withColumn("year",  F.date_format("ts_from", "yyyy"))
-        .withColumn("month", F.date_format("ts_from", "MM"))
-        .withColumn("day",   F.date_format("ts_from", "dd"))
+        .withColumn("year",  F.date_format("ts_utc", "yyyy"))
+        .withColumn("month", F.date_format("ts_utc", "MM"))
+        .withColumn("day",   F.date_format("ts_utc", "dd"))
     )
 
 
