@@ -2,7 +2,31 @@
 
 A containerised Streamlit dashboard reading from TimescaleDB (gold layer).
 Displays RIPE Atlas network performance data per country and ISP, with IODA
-signal overlays coming in Tab 3 and Tab 4.
+signal overlays.
+
+## Glossary
+
+**RTT (Round-Trip Time)** — the time it takes for a small data packet to
+travel from a RIPE Atlas probe to a target server and back, measured in
+milliseconds. Lower is better; it's one of the most basic and reliable
+signals of network health, and the core metric behind the Time series and
+ISP ranking tabs.
+
+**Packet loss** — the percentage of packets that never received a response.
+The dashboard uses the 95th percentile (loss_95th_pct) rather than a simple
+average, since averaging hides short, sharp spikes that matter most for
+outage detection.
+
+**ASN (Autonomous System Number)** — a unique identifier assigned to a
+network operator (an ISP, company, or organization) that controls how
+traffic is routed. Each row in the ISP ranking corresponds to one ASN —
+i.e. one provider.
+
+**IODA signal score** — a country-level metric from one of three independent
+data sources (BGP routing visibility, darknet/merit-nt traffic, or active
+ping sweeps) that IODA uses to detect large-scale connectivity events. Not
+directly comparable in scale to RTT, which is why the Combined view uses a
+dual-axis chart.
 
 ## Requirements
 
