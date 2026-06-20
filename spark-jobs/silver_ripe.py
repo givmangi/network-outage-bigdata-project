@@ -79,7 +79,7 @@ def build_spark(app_name: str = "silver_ripe") -> SparkSession:
         SparkSession.builder
         .appName(app_name)
         .config("spark.sql.shuffle.partitions", "8")
-        .config("spark.sql.sources.partitionOverwriteMode", "DYNAMIC")
+        .config("spark.sql.sources.partitionOverwriteMode", "STATIC")
         .config("spark.hadoop.fs.s3a.endpoint",           S3_ENDPOINT)
         .config("spark.hadoop.fs.s3a.access.key",         S3_ACCESS_KEY)
         .config("spark.hadoop.fs.s3a.secret.key",         S3_SECRET_KEY)
