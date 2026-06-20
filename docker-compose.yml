@@ -25,7 +25,7 @@ services:
   # -------------------------------------------------------------------------
   kafka:
     image: confluentinc/cp-kafka:7.6.1
-    container_name: ioda-kafka
+    container_name: kafka
     restart: unless-stopped
     ports:
       - "9092:9092"
@@ -58,14 +58,14 @@ services:
       retries: 5
       start_period: 30s
     networks:
-      - ioda-net
+      - outage-net
 
   # -------------------------------------------------------------------------
   # Kafka UI — http://localhost:8080
   # -------------------------------------------------------------------------
   kafka-ui:
     image: provectuslabs/kafka-ui:v0.7.2
-    container_name: ioda-kafka-ui
+    container_name: kafka-ui
     restart: unless-stopped
     ports:
       - "8080:8080"
@@ -76,7 +76,7 @@ services:
       kafka:
         condition: service_healthy
     networks:
-      - ioda-net
+      - outage-net
 
   # -------------------------------------------------------------------------
   # MinIO — S3-compatible object storage (bronze + silver + gold)
@@ -84,7 +84,7 @@ services:
   # -------------------------------------------------------------------------
   minio:
     image: minio/minio:RELEASE.2024-04-18T19-09-19Z
-    container_name: ioda-minio
+    container_name: minio
     restart: unless-stopped
     ports:
       - "9000:9000"
@@ -102,7 +102,7 @@ services:
       retries: 5
       start_period: 20s
     networks:
-      - ioda-net
+      - outage-net
 
   # -------------------------------------------------------------------------
   # MinIO init — bucket housekeeping (runs on every stack start)
@@ -112,7 +112,7 @@ services:
   # -------------------------------------------------------------------------
   minio-init:
     image: minio/mc:RELEASE.2024-04-18T16-45-29Z
-    container_name: ioda-minio-init
+    container_name: minio-init
     restart: on-failure
     depends_on:
       minio:
@@ -134,7 +134,7 @@ services:
         mc ls local/
       "
     networks:
-      - ioda-net
+      - outage-net
 
   # -------------------------------------------------------------------------
   # IODA Bronze Ingester
@@ -171,7 +171,7 @@ services:
     volumes:
       - ./ingestion/ioda:/app
     networks:
-      - ioda-net
+      - outage-net
 
   # -------------------------------------------------------------------------
   # RIPE Atlas Bronze Ingester (WebSocket streaming)
@@ -202,7 +202,7 @@ services:
     volumes:
       - ./ingestion/ripe:/app
     networks:
-      - ioda-net
+      - outage-net
 
   # =========================================================================
   # SILVER LAYER — Batch jobs (on-demand, exit when done)
@@ -222,6 +222,7 @@ services:
   spark-silver-ioda:
     image: apache/spark:3.5.1
     container_name: spark-silver-ioda
+    profiles: ["batch"]
     depends_on:
       minio-init:
         condition: service_completed_successfully
@@ -239,11 +240,12 @@ services:
     entrypoint: ["python3", "/opt/spark-job/submit.py", "ioda"]
     command: []
     networks:
-      - ioda-net
+      - outage-net
 
   spark-silver-ripe:
     image: apache/spark:3.5.1
     container_name: spark-silver-ripe
+    profiles: ["batch"]
     depends_on:
       minio-init:
         condition: service_completed_successfully
@@ -258,7 +260,7 @@ services:
     entrypoint: ["python3", "/opt/spark-job/submit.py", "ripe"]
     command: []
     networks:
-      - ioda-net
+      - outage-net
 
   # =========================================================================
   # SILVER LAYER — Structured Streaming (always-on, live Kafka path)
@@ -289,14 +291,14 @@ services:
       - ./spark-jobs:/opt/spark-job
     entrypoint: ["python3", "/opt/spark-job/submit.py", "stream"]
     networks:
-      - ioda-net
+      - outage-net
 
   # =========================================================================
   # GOLD LAYER: TimescaleDB (Time-series optimized PostgreSQL)
   # =========================================================================
   timescaledb:
     image: timescale/timescaledb:latest-pg15
-    container_name: ioda-timescaledb
+    container_name: timescaledb
     restart: unless-stopped
     ports:
       - "5432:5432"
@@ -308,7 +310,7 @@ services:
       - timescaledb-data:/var/lib/postgresql/data
       - ./config/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
-      - ioda-net
+      - outage-net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U admin -d outage_intelligence"]
       interval: 10s
@@ -319,6 +321,7 @@ services:
   spark-gold:
     image: apache/spark:3.5.1
     container_name: spark-gold
+    profiles: ["batch"]
     depends_on:
       minio-init:
         condition: service_completed_successfully
@@ -336,7 +339,7 @@ services:
     entrypoint: ["python3", "/opt/spark-job/submit.py", "gold"]
     command: []
     networks:
-      - ioda-net
+      - outage-net
 
 
   jupyter:
@@ -350,7 +353,7 @@ services:
     volumes:
       - ./notebooks:/home/jovyan/work
     networks:
-      - ioda-net
+      - outage-net
   
   dashboard:
     build:
@@ -369,7 +372,7 @@ services:
       timescaledb:
         condition: service_healthy
     networks:
-      - ioda-net
+      - outage-net
 
 # -------------------------------------------------------------------------
 # Named volumes
@@ -386,5 +389,5 @@ volumes:
 # Network
 # -------------------------------------------------------------------------
 networks:
-  ioda-net:
+  outage-net:
     driver: bridge
