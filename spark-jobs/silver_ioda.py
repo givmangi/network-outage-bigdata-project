@@ -88,7 +88,7 @@ def build_spark(app_name: str = "silver_ioda") -> SparkSession:
         SparkSession.builder
         .appName(app_name)
         .config("spark.sql.shuffle.partitions", "8")
-        .config("spark.sql.sources.partitionOverwriteMode", "DEFAULT")
+        .config("spark.sql.sources.partitionOverwriteMode", "DYNAMIC")
         # S3A / MinIO settings
         .config("spark.hadoop.fs.s3a.endpoint",           S3_ENDPOINT)
         .config("spark.hadoop.fs.s3a.access.key",         S3_ACCESS_KEY)
