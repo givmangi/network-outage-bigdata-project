@@ -2,6 +2,7 @@ import os
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 from sqlalchemy import create_engine, text
 
 st.set_page_config(
@@ -57,6 +58,30 @@ def load_timeseries(country: str, start: str, end: str) -> pd.DataFrame:
           AND b.rtt_median_ms > 0
           AND b.total_measurements >= 5
         ORDER BY b.time_window
+    """)
+    with engine.connect() as conn:
+        df = pd.read_sql(query, conn, params={
+            "country": country,
+            "start": start,
+            "end": end,
+        })
+    return df
+
+@st.cache_data(ttl=300)
+def load_ioda_signals(country: str, start: str, end: str) -> pd.DataFrame:
+    engine = get_engine()
+    query = text("""
+        SELECT
+            time_window,
+            country_code,
+            datasource,
+            signal_value,
+            collection_gap
+        FROM ioda_signals
+        WHERE country_code = :country
+          AND time_window >= :start
+          AND time_window < :end
+        ORDER BY time_window
     """)
     with engine.connect() as conn:
         df = pd.read_sql(query, conn, params={
@@ -274,3 +299,119 @@ with tab2:
             use_container_width=True,
             hide_index=True,
         )
+
+# ---------------------------------------------------------------------------
+# Tab 3 — IODA signals
+# ---------------------------------------------------------------------------
+
+with tab3:
+    st.subheader(f"IODA signals — {selected_country}")
+
+    ioda_df = load_ioda_signals(
+        selected_country,
+        str(start_date),
+        str(end_date),
+    )
+
+    if ioda_df.empty:
+        st.warning(f"No IODA signal data found for {selected_country} in this date range.")
+    else:
+        datasource_labels = {
+            "bgp": "BGP routing visibility",
+            "merit-nt": "Merit darknet traffic",
+            "ping-slash24": "Active ping (/24 blocks)",
+        }
+        ioda_df["datasource_label"] = ioda_df["datasource"].map(
+            lambda x: datasource_labels.get(x, x)
+        )
+
+        fig_ioda = px.line(
+            ioda_df,
+            x="time_window",
+            y="signal_value",
+            color="datasource_label",
+            labels={
+                "time_window": "Time (UTC)",
+                "signal_value": "Signal score",
+                "datasource_label": "Data source",
+            },
+            title=f"IODA signal scores — {selected_country}",
+        )
+        fig_ioda.update_layout(height=450, hovermode="x unified")
+        st.plotly_chart(fig_ioda, use_container_width=True)
+
+        st.caption(
+            "IODA signals are country-level scores from three independent sources: "
+            "BGP routing announcements, darknet traffic visibility, and active ping sweeps. "
+            "A sustained drop across multiple sources can indicate a real outage."
+        )
+
+        gap_count = ioda_df["collection_gap"].sum()
+        if gap_count > 0:
+            st.info(f"{gap_count} data points were flagged as collection gaps (interpolated or missing).")
+
+# ---------------------------------------------------------------------------
+# Tab 4 — Combined View
+# ---------------------------------------------------------------------------
+
+with tab4:
+    st.subheader(f"Combined view — {selected_country}")
+    st.caption(
+        "RIPE Atlas RTT (left axis) overlaid with IODA signal score (right axis). "
+        "Look for RTT spikes that align with IODA signal drops — that's a sign of a real, "
+        "independently-confirmed network event."
+    )
+
+    # Reuse the same RIPE data, averaged across all providers per hour
+    ripe_hourly = (
+        df.groupby("time_window", as_index=False)
+        .agg(avg_rtt=("rtt_median_ms", "mean"))
+    )
+
+    ioda_combined = load_ioda_signals(
+        selected_country,
+        str(start_date),
+        str(end_date),
+    )
+
+    if ripe_hourly.empty and ioda_combined.empty:
+        st.warning("No data available for this country and date range.")
+    else:
+        datasource_choice = st.selectbox(
+            "IODA data source to overlay",
+            options=ioda_combined["datasource"].unique().tolist() if not ioda_combined.empty else [],
+            key="tab4_datasource",
+        )
+
+        ioda_filtered = ioda_combined[ioda_combined["datasource"] == datasource_choice] if not ioda_combined.empty else pd.DataFrame()
+
+        fig_combined = go.Figure()
+
+        fig_combined.add_trace(go.Scatter(
+            x=ripe_hourly["time_window"],
+            y=ripe_hourly["avg_rtt"],
+            name="Avg RTT (ms)",
+            yaxis="y1",
+            line=dict(color="#378ADD"),
+        ))
+
+        if not ioda_filtered.empty:
+            fig_combined.add_trace(go.Scatter(
+                x=ioda_filtered["time_window"],
+                y=ioda_filtered["signal_value"],
+                name=f"IODA {datasource_choice}",
+                yaxis="y2",
+                line=dict(color="#D85A30"),
+            ))
+
+        fig_combined.update_layout(
+            height=500,
+            title=f"RTT vs IODA {datasource_choice} — {selected_country}",
+            xaxis=dict(title="Time (UTC)"),
+            yaxis=dict(title="Avg RTT (ms)", side="left"),
+            yaxis2=dict(title=f"IODA {datasource_choice} score", side="right", overlaying="y"),
+            hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        )
+
+        st.plotly_chart(fig_combined, use_container_width=True)
