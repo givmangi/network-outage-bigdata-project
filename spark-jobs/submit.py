@@ -111,7 +111,7 @@ job      = JOBS[job_name]
 # ---------------------------------------------------------------------------
 # Build spark-submit command
 # ---------------------------------------------------------------------------
-cmd = ["/opt/spark/bin/spark-submit", "--master", "local[*]",
+cmd = ["/opt/spark/bin/spark-submit", "--master", "local[4]",
         "--driver-memory", "2g",
        "--packages", job["packages"]]
 
