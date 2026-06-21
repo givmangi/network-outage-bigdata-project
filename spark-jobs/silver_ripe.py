@@ -303,9 +303,9 @@ def main() -> None:
             spark.stop()
             sys.exit(1)
         if args.start is not None and args.end is None:
-            yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
-            args.end = yesterday.strftime("%Y-%m-%d")
-            log.info("No --end provided, defaulting to yesterday: %s", args.end)
+            today = (datetime.now(timezone.utc) ).replace(hour=0, minute=0, second=0, microsecond=0)
+            args.end = today.strftime("%Y-%m-%d")
+            log.info("No --end provided, defaulting to today: %s", args.end)
 
         start = datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
         end   = datetime.strptime(args.end,   "%Y-%m-%d").replace(tzinfo=timezone.utc)
@@ -314,7 +314,7 @@ def main() -> None:
             spark.stop()
             sys.exit(1)
         if end.date() >= datetime.now(timezone.utc).date():
-            log.error("--end must be yesterday or earlier (no today/future partitions)")
+            log.error("--end must be today or earlier (no today/future partitions)")
             spark.stop()
             sys.exit(1)
         partitions = _date_partitions_from_range(start, end)

@@ -575,7 +575,6 @@ def main() -> None:
         if args.end is None:
             end = (
                 datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-                - timedelta(days=1)
             )
             log.info("No --end specified; defaulting to yesterday (%s).", end.strftime("%Y-%m-%d"))
         else:
@@ -586,7 +585,7 @@ def main() -> None:
             spark.stop()
             sys.exit(1)
         if end.date() >= datetime.now(timezone.utc).date():
-            log.error("--end must be yesterday or earlier (no today/future partitions)")
+            log.error("--end must be today or earlier (no today/future partitions)")
             spark.stop()
             sys.exit(1)
         shared_partitions = _date_partitions_from_range(start, end)
