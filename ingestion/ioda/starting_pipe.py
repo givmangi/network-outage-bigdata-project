@@ -250,24 +250,19 @@ def _expand_signal(records: list[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def _s3_key(layer: str, entity_type: str, entity_code: str,
-             datasource: str | None, run_date: datetime) -> str:
-    """
-    Build the S3 object key in Hive-partitioned format.
-    This is the MinIO equivalent of the local _partition_path() function.
-
-    Example output:
-      ioda/alerts/year=2026/month=06/day=04/country_IT_bgp.ndjson.gz
-    """
+             datasource: str | None, run_date: datetime, ts_suffix: int = None) -> str:
+    """Build the S3 object key. Uses provided suffix (for backfills) or current time (for streaming)."""
     date_part = f"year={run_date.year:04d}/month={run_date.month:02d}/day={run_date.day:02d}"
-    ts_now = int(time.time()) # Grab the current unix timestamp
+    
+    # Default to current time for streaming to prevent 15-minute overwrites
+    final_ts = ts_suffix if ts_suffix is not None else int(time.time())
         
     if datasource:
-        fname = f"{entity_type}_{entity_code}_{datasource}_{ts_now}.ndjson.gz"
+        fname = f"{entity_type}_{entity_code}_{datasource}_{final_ts}.ndjson.gz"
     else:
-        fname = f"{entity_type}_{entity_code}_{ts_now}.ndjson.gz"
+        fname = f"{entity_type}_{entity_code}_{final_ts}.ndjson.gz"
             
     return f"ioda/{layer}/{date_part}/{fname}"
-
 
 def _dual_write(
     records: Iterator[dict],
@@ -386,7 +381,7 @@ def ingest_entity(
                 kafka_topic="raw.ioda.alerts",
                 kafka_key=entity_code,
                 s3_client=s3,
-                s3_key=_s3_key("alerts", entity_type, entity_code, ds, run_date),
+                s3_key=_s3_key("alerts", entity_type, entity_code, ds, run_date, ts_suffix=from_ts),
                 producer=producer,
             )
             summary[f"alerts_{ds}"] = n
@@ -403,7 +398,7 @@ def ingest_entity(
             kafka_topic="raw.ioda.events",
             kafka_key=entity_code,
             s3_client=s3,
-            s3_key=_s3_key("events", entity_type, entity_code, None, run_date),
+            s3_key=_s3_key("events", entity_type, entity_code, None, run_date, ts_suffix=from_ts),
             producer=producer,
         )
         summary["events"] = n
@@ -423,7 +418,7 @@ def ingest_entity(
                 kafka_topic="raw.ioda.signals",
                 kafka_key=entity_code,
                 s3_client=s3,
-                s3_key=_s3_key("signals", entity_type, entity_code, ds, run_date),
+                s3_key=_s3_key("signals", entity_type, entity_code, ds, run_date, ts_suffix=from_ts),
                 producer=producer,
             )
             summary[f"signals_{ds}"] = n

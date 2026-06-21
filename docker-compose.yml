@@ -361,18 +361,18 @@ services:
       - outage-net
 
 
-  jupyter:
-    image: jupyter/scipy-notebook:latest
-    container_name: ioda-jupyter
-    restart: unless-stopped
-    ports:
-      - "8888:8888"
-    environment:
-      JUPYTER_ENABLE_LAB: "yes"
-    volumes:
-      - ./notebooks:/home/jovyan/work
-    networks:
-      - outage-net
+  # jupyter:
+  #   image: jupyter/scipy-notebook:latest
+  #   container_name: ioda-jupyter
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8888:8888"
+  #   environment:
+  #     JUPYTER_ENABLE_LAB: "yes"
+  #   volumes:
+  #     - ./notebooks:/home/jovyan/work
+  #   networks:
+  #     - outage-net
   
   dashboard:
     build:
