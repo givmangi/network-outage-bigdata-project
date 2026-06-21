@@ -79,7 +79,16 @@ def build_spark(app_name: str = "silver_ripe") -> SparkSession:
         SparkSession.builder
         .appName(app_name)
         .config("spark.sql.shuffle.partitions", "8")
+        # DYNAMIC: overwrite only the specific day partitions being written,
+        # not the entire silver/ripe/ping/ directory.
         .config("spark.sql.sources.partitionOverwriteMode", "DYNAMIC")
+        # 'directory' S3A committer — bundled in hadoop-aws, enforces
+        # partition-level isolation on MinIO. The 'partitioned' committer
+        # requires hadoop-cloud-storage which is absent from apache/spark:3.5.1
+        # and causes silent fallback to static-overwrite behaviour.
+        .config("spark.hadoop.fs.s3a.committer.name", "directory")
+        .config("spark.hadoop.fs.s3a.committer.staging.conflict-mode", "replace")
+        .config("spark.hadoop.fs.s3a.committer.staging.tmp.path", "tmp/staging")
         .config("spark.hadoop.fs.s3a.endpoint",           S3_ENDPOINT)
         .config("spark.hadoop.fs.s3a.access.key",         S3_ACCESS_KEY)
         .config("spark.hadoop.fs.s3a.secret.key",         S3_SECRET_KEY)
@@ -202,20 +211,6 @@ def process_ping(spark: SparkSession, date_partition: str) -> int:
         .withColumn("day",   F.date_format("ts_utc", "dd"))
     )
 
-    # ---------------------------------------------------------
-    # NEW CODE: Boundary filter to prevent DYNAMIC spillover
-    # ---------------------------------------------------------
-    target_year = date_partition.split("/")[0].split("=")[1]
-    target_month = date_partition.split("/")[1].split("=")[1]
-    target_day = date_partition.split("/")[2].split("=")[1]
-
-    silver = silver.filter(
-        (F.col("year") == target_year) &
-        (F.col("month") == target_month) &
-        (F.col("day") == target_day)
-    )
-    # ---------------------------------------------------------
-
     dst = f"s3a://{SILVER_BUCKET}/ripe/ping"
     log.info("[ripe/ping] writing Silver Parquet → %s", dst)
 
@@ -303,9 +298,9 @@ def main() -> None:
             spark.stop()
             sys.exit(1)
         if args.start is not None and args.end is None:
-            today = (datetime.now(timezone.utc) ).replace(hour=0, minute=0, second=0, microsecond=0)
-            args.end = today.strftime("%Y-%m-%d")
-            log.info("No --end provided, defaulting to today: %s", args.end)
+            yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+            args.end = yesterday.strftime("%Y-%m-%d")
+            log.info("No --end provided, defaulting to yesterday: %s", args.end)
 
         start = datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
         end   = datetime.strptime(args.end,   "%Y-%m-%d").replace(tzinfo=timezone.utc)
@@ -314,7 +309,12 @@ def main() -> None:
             spark.stop()
             sys.exit(1)
         if end.date() > datetime.now(timezone.utc).date():
-            log.error("--end must be today or earlier (no today/future partitions)")
+            log.error(
+                "--end %s is in the future. --end is exclusive, so use tomorrow's "
+                "date at most (e.g. --end %s to process through today).",
+                args.end,
+                (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d"),
+            )
             spark.stop()
             sys.exit(1)
         partitions = _date_partitions_from_range(start, end)

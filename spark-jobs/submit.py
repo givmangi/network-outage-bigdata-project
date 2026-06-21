@@ -51,22 +51,15 @@ COMMON_CONFS = [
     "spark.hadoop.fs.s3a.connection.ssl.enabled=false",
     "spark.sql.shuffle.partitions=8",
     "spark.sql.files.ignoreMissingFiles=true",
-    # ---------------------------------------------------------------------------
-    # Partition-safe writes to MinIO (S3-compatible)
-    # ---------------------------------------------------------------------------
-    # DYNAMIC: overwrite only the partitions (day folders) touched by each write,
-    # not the entire output directory. Must be set here in spark-submit --conf as
-    # well as in build_spark() — the session config can be silently overridden if
-    # the SparkSession is already initialised before the Python script's config runs.
+    # DYNAMIC: overwrite only the day partitions touched by each write.
     "spark.sql.sources.partitionOverwriteMode=DYNAMIC",
-    # The S3A partitioned committer stages each partition's output independently
-    # before committing, which is what makes DYNAMIC mode actually work on S3/MinIO.
-    # Without these, the default committer stages at the full output path level and
-    # DYNAMIC mode collapses back to static-like behaviour — wiping the whole tree.
-    "spark.hadoop.fs.s3a.committer.name=partitioned",
+    # 'directory' committer is bundled in hadoop-aws and correctly enforces
+    # partition-level isolation on S3/MinIO. The 'partitioned' committer
+    # requires hadoop-cloud-storage (absent from apache/spark:3.5.1) and
+    # causes ClassNotFoundException: PathOutputCommitProtocol at write time.
+    "spark.hadoop.fs.s3a.committer.name=directory",
     "spark.hadoop.fs.s3a.committer.staging.conflict-mode=replace",
-    "spark.sql.sources.commitProtocolClass=org.apache.spark.internal.io.cloud.PathOutputCommitProtocol",
-    "spark.sql.parquet.output.committer.class=org.apache.spark.internal.io.cloud.BindingParquetOutputCommitter",
+    "spark.hadoop.fs.s3a.committer.staging.tmp.path=tmp/staging",
 ]
 
 JOBS = {
@@ -111,7 +104,7 @@ job      = JOBS[job_name]
 # ---------------------------------------------------------------------------
 # Build spark-submit command
 # ---------------------------------------------------------------------------
-cmd = ["/opt/spark/bin/spark-submit", "--master", "local[4]",
+cmd = ["/opt/spark/bin/spark-submit", "--master", "local[*]",
         "--driver-memory", "2g",
        "--packages", job["packages"]]
 

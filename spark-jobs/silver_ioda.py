@@ -88,7 +88,16 @@ def build_spark(app_name: str = "silver_ioda") -> SparkSession:
         SparkSession.builder
         .appName(app_name)
         .config("spark.sql.shuffle.partitions", "8")
+        # DYNAMIC: overwrite only the specific day partitions being written,
+        # not the entire silver/ioda/<layer>/ directory.
         .config("spark.sql.sources.partitionOverwriteMode", "DYNAMIC")
+        # 'directory' S3A committer — bundled in hadoop-aws, enforces
+        # partition-level isolation on MinIO. The 'partitioned' committer
+        # requires hadoop-cloud-storage which is absent from apache/spark:3.5.1
+        # and causes a ClassNotFoundException at write time.
+        .config("spark.hadoop.fs.s3a.committer.name", "directory")
+        .config("spark.hadoop.fs.s3a.committer.staging.conflict-mode", "replace")
+        .config("spark.hadoop.fs.s3a.committer.staging.tmp.path", "tmp/staging")
         # S3A / MinIO settings
         .config("spark.hadoop.fs.s3a.endpoint",           S3_ENDPOINT)
         .config("spark.hadoop.fs.s3a.access.key",         S3_ACCESS_KEY)
@@ -132,20 +141,21 @@ def process_alerts(spark: SparkSession, date_partition: str) -> int:
     Read all alert NDJSON.GZ files for the given date partition, normalise
     the schema, deduplicate, and write Parquet to Silver.
 
-    IODA alert JSON structure (from /outages/alerts endpoint):
+    IODA alert JSON structure (current /outages/alerts endpoint):
       {
         "datasource": "bgp",
         "entity": {"type": "country", "code": "IT", "name": "Italy"},
-        "from": 1234567890,
+        "time": 1234567890,       # unix epoch — NOTE: was "from" in older data
         "until": 1234654290,
         "value": 4300.0,
-        "historicalValue": 4350.0,
+        "historyValue": 4350.0,   # NOTE: was "historicalValue" in older data
         "condition": "...",
         "level": "warning",
         "method": "..."
       }
+    Both old ("from"/"historicalValue") and new ("time"/"historyValue") field
+    names are handled at runtime by checking raw.columns.
     Entity fields are NESTED under "entity", not flat at the top level.
-    We must use entity.type and entity.code, not entityType/entityCode.
     """
     src = _bronze_glob("alerts", date_partition)
     log.info("[alerts] reading from %s", src)
@@ -182,15 +192,25 @@ def process_alerts(spark: SparkSession, date_partition: str) -> int:
 
     silver = (
         raw
-        .withColumn("ts_from",          F.to_timestamp(F.col("from")))
+        # IODA alerts API changed field names:
+        #   old: "from" (unix epoch), "historicalValue"
+        #   new: "time" (unix epoch), "historyValue"
+        # Support both by checking which is present at runtime.
+        .withColumn("ts_from",
+            F.to_timestamp(
+                F.col("time") if "time" in available else F.col("from")
+            )
+        )
         .withColumn("ts_until",         F.to_timestamp(F.col("until")))
         .withColumn("entity_type",      entity_type_col)
         .withColumn("entity_code",      entity_code_col)
         .withColumn("datasource",       F.lower(F.col("datasource")))
         .withColumn("alert_value",      F.col("value").cast(DoubleType()))
-        .withColumn("historical_value", F.col("historicalValue").cast(DoubleType())
-                    if "historicalValue" in available
-                    else F.lit(None).cast(DoubleType()))
+        .withColumn("historical_value",
+            F.col("historyValue").cast(DoubleType()) if "historyValue" in available
+            else F.col("historicalValue").cast(DoubleType()) if "historicalValue" in available
+            else F.lit(None).cast(DoubleType())
+        )
         .withColumn("condition",        F.col("condition") if "condition" in available
                     else F.lit(None).cast(StringType()))
         .withColumn("level",            F.col("level") if "level" in available
@@ -207,20 +227,6 @@ def process_alerts(spark: SparkSession, date_partition: str) -> int:
         .withColumn("month", F.date_format("ts_from", "MM"))
         .withColumn("day",   F.date_format("ts_from", "dd"))
     )
-
-    # ---------------------------------------------------------
-    # NEW CODE: Boundary filter to prevent DYNAMIC spillover
-    # ---------------------------------------------------------
-    target_year = date_partition.split("/")[0].split("=")[1]
-    target_month = date_partition.split("/")[1].split("=")[1]
-    target_day = date_partition.split("/")[2].split("=")[1]
-
-    silver = silver.filter(
-        (F.col("year") == target_year) &
-        (F.col("month") == target_month) &
-        (F.col("day") == target_day)
-    )
-    # ---------------------------------------------------------
 
     # Write to base layer path — partitionBy adds year=/month=/day= itself
     dst = _silver_path("alerts")
@@ -307,20 +313,6 @@ def process_events(spark: SparkSession, date_partition: str) -> int:
         .withColumn("day",   F.date_format("ts_from", "dd"))
     )
 
-    # ---------------------------------------------------------
-    # NEW CODE: Boundary filter to prevent DYNAMIC spillover
-    # ---------------------------------------------------------
-    target_year = date_partition.split("/")[0].split("=")[1]
-    target_month = date_partition.split("/")[1].split("=")[1]
-    target_day = date_partition.split("/")[2].split("=")[1]
-
-    silver = silver.filter(
-        (F.col("year") == target_year) &
-        (F.col("month") == target_month) &
-        (F.col("day") == target_day)
-    )
-    # ---------------------------------------------------------
-    
     dst = _silver_path("events")
     log.info("[events] writing Silver Parquet → %s", dst)
 
@@ -384,20 +376,6 @@ def process_signals(spark: SparkSession, date_partition: str) -> int:
         .withColumn("month", F.date_format("ts_utc", "MM"))
         .withColumn("day",   F.date_format("ts_utc", "dd"))
     )
-
-    # ---------------------------------------------------------
-    # NEW CODE: Boundary filter to prevent DYNAMIC spillover
-    # ---------------------------------------------------------
-    target_year = date_partition.split("/")[0].split("=")[1]
-    target_month = date_partition.split("/")[1].split("=")[1]
-    target_day = date_partition.split("/")[2].split("=")[1]
-
-    silver = silver.filter(
-        (F.col("year") == target_year) &
-        (F.col("month") == target_month) &
-        (F.col("day") == target_day)
-    )
-    # ---------------------------------------------------------
 
     dst = _silver_path("signals")
     log.info("[signals] writing Silver Parquet → %s", dst)
@@ -575,6 +553,7 @@ def main() -> None:
         if args.end is None:
             end = (
                 datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+                - timedelta(days=1)
             )
             log.info("No --end specified; defaulting to yesterday (%s).", end.strftime("%Y-%m-%d"))
         else:
@@ -584,8 +563,8 @@ def main() -> None:
             log.error("--start must be before --end")
             spark.stop()
             sys.exit(1)
-        if end.date() > datetime.now(timezone.utc).date():
-            log.error("--end must be today or earlier (no today/future partitions)")
+        if end.date() >= datetime.now(timezone.utc).date():
+            log.error("--end must be yesterday or earlier (no today/future partitions)")
             spark.stop()
             sys.exit(1)
         shared_partitions = _date_partitions_from_range(start, end)
