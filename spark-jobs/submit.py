@@ -51,6 +51,22 @@ COMMON_CONFS = [
     "spark.hadoop.fs.s3a.connection.ssl.enabled=false",
     "spark.sql.shuffle.partitions=8",
     "spark.sql.files.ignoreMissingFiles=true",
+    # ---------------------------------------------------------------------------
+    # Partition-safe writes to MinIO (S3-compatible)
+    # ---------------------------------------------------------------------------
+    # DYNAMIC: overwrite only the partitions (day folders) touched by each write,
+    # not the entire output directory. Must be set here in spark-submit --conf as
+    # well as in build_spark() — the session config can be silently overridden if
+    # the SparkSession is already initialised before the Python script's config runs.
+    "spark.sql.sources.partitionOverwriteMode=DYNAMIC",
+    # The S3A partitioned committer stages each partition's output independently
+    # before committing, which is what makes DYNAMIC mode actually work on S3/MinIO.
+    # Without these, the default committer stages at the full output path level and
+    # DYNAMIC mode collapses back to static-like behaviour — wiping the whole tree.
+    "spark.hadoop.fs.s3a.committer.name=partitioned",
+    "spark.hadoop.fs.s3a.committer.staging.conflict-mode=replace",
+    "spark.sql.sources.commitProtocolClass=org.apache.spark.internal.io.cloud.PathOutputCommitProtocol",
+    "spark.sql.parquet.output.committer.class=org.apache.spark.internal.io.cloud.BindingParquetOutputCommitter",
 ]
 
 JOBS = {

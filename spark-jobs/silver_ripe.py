@@ -79,7 +79,12 @@ def build_spark(app_name: str = "silver_ripe") -> SparkSession:
         SparkSession.builder
         .appName(app_name)
         .config("spark.sql.shuffle.partitions", "8")
-        .config("spark.sql.sources.partitionOverwriteMode", "STATIC")
+        # DYNAMIC: overwrite only the specific day partitions being written,
+        # not the entire silver/ripe/ping/ directory. STATIC (the wrong
+        # default) deletes the whole output tree before writing, so each
+        # day's run destroys all previously processed days — only the last
+        # partition in the loop survives.
+        .config("spark.sql.sources.partitionOverwriteMode", "DYNAMIC")
         .config("spark.hadoop.fs.s3a.endpoint",           S3_ENDPOINT)
         .config("spark.hadoop.fs.s3a.access.key",         S3_ACCESS_KEY)
         .config("spark.hadoop.fs.s3a.secret.key",         S3_SECRET_KEY)

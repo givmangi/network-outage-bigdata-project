@@ -88,7 +88,12 @@ def build_spark(app_name: str = "silver_ioda") -> SparkSession:
         SparkSession.builder
         .appName(app_name)
         .config("spark.sql.shuffle.partitions", "8")
-        .config("spark.sql.sources.partitionOverwriteMode", "STATIC")
+        # DYNAMIC: overwrite only the specific day partitions being written,
+        # not the entire silver/ioda/<layer>/ directory. STATIC (the wrong
+        # default) deletes the whole output tree before writing, so each
+        # day's run destroys all previously processed days — only the last
+        # partition in the loop survives.
+        .config("spark.sql.sources.partitionOverwriteMode", "DYNAMIC")
         # S3A / MinIO settings
         .config("spark.hadoop.fs.s3a.endpoint",           S3_ENDPOINT)
         .config("spark.hadoop.fs.s3a.access.key",         S3_ACCESS_KEY)
