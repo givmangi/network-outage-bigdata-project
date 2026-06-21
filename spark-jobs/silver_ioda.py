@@ -46,8 +46,8 @@ from pyspark.sql.types import (
 # ---------------------------------------------------------------------------
 
 S3_ENDPOINT   = os.environ.get("S3_ENDPOINT_URL",   "http://minio:9000")
-S3_ACCESS_KEY = os.environ.get("S3_ACCESS_KEY",     "admin")
-S3_SECRET_KEY = os.environ.get("S3_SECRET_KEY",     "password123")
+S3_ACCESS_KEY = os.environ.get("S3_ACCESS_KEY")
+S3_SECRET_KEY = os.environ.get("S3_SECRET_KEY")
 BRONZE_BUCKET = os.environ.get("S3_BUCKET_BRONZE",  "bronze")
 SILVER_BUCKET = os.environ.get("S3_BUCKET_SILVER",  "silver")
 

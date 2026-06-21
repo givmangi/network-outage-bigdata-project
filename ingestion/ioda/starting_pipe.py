@@ -66,7 +66,7 @@ from urllib3.util.retry import Retry
 IODA_BASE_URL        = os.environ.get("IODA_BASE_URL",         "https://api.ioda.inetintel.cc.gatech.edu/v2")
 KAFKA_BOOTSTRAP      = os.environ.get("KAFKA_BOOTSTRAP_SERVERS","kafka:29092")
 S3_ENDPOINT          = os.environ.get("S3_ENDPOINT_URL",        "http://minio:9000")
-S3_ACCESS_KEY        = os.environ.get("S3_ACCESS_KEY",          "admin")
+S3_ACCESS_KEY        = os.environ.get("S3_ACCESS_KEY")
 S3_SECRET_KEY        = os.environ.get("S3_SECRET_KEY",          "")
 S3_BUCKET_BRONZE     = os.environ.get("S3_BUCKET_BRONZE",       "bronze")
 ENTITY_TYPE          = os.environ.get("ENTITY_TYPE",            "country")

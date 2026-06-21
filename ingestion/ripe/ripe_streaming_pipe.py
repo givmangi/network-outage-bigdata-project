@@ -36,8 +36,8 @@ KAFKA_BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 S3_ENDPOINT = os.environ.get("S3_ENDPOINT_URL", "http://localhost:9000")
 
 # Now it safely pulls directly from your .env file!
-S3_ACCESS_KEY = os.environ.get("MINIO_ROOT_USER", "admin")
-S3_SECRET_KEY = os.environ.get("MINIO_ROOT_PASSWORD", "admin123") 
+S3_ACCESS_KEY = os.environ.get("MINIO_ROOT_USER")
+S3_SECRET_KEY = os.environ.get("MINIO_ROOT_PASSWORD")
 S3_BUCKET_BRONZE = os.environ.get("S3_BUCKET_BRONZE", "bronze")
 
 # We flush the MinIO buffer every 15 minutes or 10,000 records, whichever comes first

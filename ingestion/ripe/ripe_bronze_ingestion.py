@@ -42,8 +42,8 @@ load_dotenv(find_dotenv())
 RIPE_RESULTS_URL = "https://atlas.ripe.net/api/v2/measurements/{}/results/"
 
 S3_ENDPOINT = os.environ.get("S3_ENDPOINT_URL", "http://localhost:9000")
-S3_ACCESS_KEY = os.environ.get("MINIO_ROOT_USER", "admin")
-S3_SECRET_KEY = os.environ.get("MINIO_ROOT_PASSWORD", "admin123") 
+S3_ACCESS_KEY = os.environ.get("MINIO_ROOT_USER")
+S3_SECRET_KEY = os.environ.get("MINIO_ROOT_PASSWORD")
 S3_BUCKET_BRONZE = os.environ.get("S3_BUCKET_BRONZE", "bronze")
 
 # RIPE Atlas Built-In Measurement IDs for IPv4 Pings to DNS Root Servers

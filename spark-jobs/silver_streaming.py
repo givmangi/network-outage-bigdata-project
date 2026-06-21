@@ -37,8 +37,8 @@ Usage:
             com.amazonaws:aws-java-sdk-bundle:1.12.262,\\
             org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1 \\
         --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \\
-        --conf spark.hadoop.fs.s3a.access.key=admin \\
-        --conf spark.hadoop.fs.s3a.secret.key=password123 \\
+        --conf spark.hadoop.fs.s3a.access.key=<YOUR_ACCESS_KEY> \
+        --conf spark.hadoop.fs.s3a.secret.key=<YOUR_SECRET_KEY> \
         --conf spark.hadoop.fs.s3a.path.style.access=true \\
         --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \\
         spark/silver_streaming.py
@@ -62,8 +62,8 @@ from pyspark.sql.types import (
 
 KAFKA_BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
 S3_ENDPOINT     = os.environ.get("S3_ENDPOINT_URL",         "http://minio:9000")
-S3_ACCESS_KEY   = os.environ.get("S3_ACCESS_KEY",           "admin")
-S3_SECRET_KEY   = os.environ.get("S3_SECRET_KEY",           "password123")
+S3_ACCESS_KEY   = os.environ.get("S3_ACCESS_KEY")
+S3_SECRET_KEY   = os.environ.get("S3_SECRET_KEY")
 BRONZE_BUCKET   = os.environ.get("S3_BUCKET_BRONZE",        "bronze")
 SILVER_BUCKET   = os.environ.get("S3_BUCKET_SILVER",        "silver")
 
