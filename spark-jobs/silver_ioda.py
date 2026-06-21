@@ -584,7 +584,7 @@ def main() -> None:
             log.error("--start must be before --end")
             spark.stop()
             sys.exit(1)
-        if end.date() >= datetime.now(timezone.utc).date():
+        if end.date() > datetime.now(timezone.utc).date():
             log.error("--end must be today or earlier (no today/future partitions)")
             spark.stop()
             sys.exit(1)
