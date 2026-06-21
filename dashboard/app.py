@@ -114,9 +114,9 @@ st.sidebar.divider()
 
 col1, col2 = st.sidebar.columns(2)
 with col1:
-    start_date = st.date_input("From", value=pd.Timestamp("2026-06-17"))
+    start_date = st.date_input("From", value=pd.Timestamp.now().normalize() - pd.Timedelta(days=30))
 with col2:
-    end_date = st.date_input("To", value=pd.Timestamp("2026-06-20"))
+    end_date = st.date_input("To", value=pd.Timestamp.now().normalize() + pd.Timedelta(days=1))
 
 # ---------------------------------------------------------------------------
 # Load data
