@@ -88,11 +88,6 @@ def build_spark(app_name: str = "silver_ioda") -> SparkSession:
         SparkSession.builder
         .appName(app_name)
         .config("spark.sql.shuffle.partitions", "8")
-        # DYNAMIC: overwrite only the specific day partitions being written,
-        # not the entire silver/ioda/<layer>/ directory. STATIC (the wrong
-        # default) deletes the whole output tree before writing, so each
-        # day's run destroys all previously processed days — only the last
-        # partition in the loop survives.
         .config("spark.sql.sources.partitionOverwriteMode", "DYNAMIC")
         # S3A / MinIO settings
         .config("spark.hadoop.fs.s3a.endpoint",           S3_ENDPOINT)
@@ -213,6 +208,20 @@ def process_alerts(spark: SparkSession, date_partition: str) -> int:
         .withColumn("day",   F.date_format("ts_from", "dd"))
     )
 
+    # ---------------------------------------------------------
+    # NEW CODE: Boundary filter to prevent DYNAMIC spillover
+    # ---------------------------------------------------------
+    target_year = date_partition.split("/")[0].split("=")[1]
+    target_month = date_partition.split("/")[1].split("=")[1]
+    target_day = date_partition.split("/")[2].split("=")[1]
+
+    silver = silver.filter(
+        (F.col("year") == target_year) &
+        (F.col("month") == target_month) &
+        (F.col("day") == target_day)
+    )
+    # ---------------------------------------------------------
+
     # Write to base layer path — partitionBy adds year=/month=/day= itself
     dst = _silver_path("alerts")
     log.info("[alerts] writing Silver Parquet → %s", dst)
@@ -298,6 +307,20 @@ def process_events(spark: SparkSession, date_partition: str) -> int:
         .withColumn("day",   F.date_format("ts_from", "dd"))
     )
 
+    # ---------------------------------------------------------
+    # NEW CODE: Boundary filter to prevent DYNAMIC spillover
+    # ---------------------------------------------------------
+    target_year = date_partition.split("/")[0].split("=")[1]
+    target_month = date_partition.split("/")[1].split("=")[1]
+    target_day = date_partition.split("/")[2].split("=")[1]
+
+    silver = silver.filter(
+        (F.col("year") == target_year) &
+        (F.col("month") == target_month) &
+        (F.col("day") == target_day)
+    )
+    # ---------------------------------------------------------
+    
     dst = _silver_path("events")
     log.info("[events] writing Silver Parquet → %s", dst)
 
@@ -361,6 +384,20 @@ def process_signals(spark: SparkSession, date_partition: str) -> int:
         .withColumn("month", F.date_format("ts_utc", "MM"))
         .withColumn("day",   F.date_format("ts_utc", "dd"))
     )
+
+    # ---------------------------------------------------------
+    # NEW CODE: Boundary filter to prevent DYNAMIC spillover
+    # ---------------------------------------------------------
+    target_year = date_partition.split("/")[0].split("=")[1]
+    target_month = date_partition.split("/")[1].split("=")[1]
+    target_day = date_partition.split("/")[2].split("=")[1]
+
+    silver = silver.filter(
+        (F.col("year") == target_year) &
+        (F.col("month") == target_month) &
+        (F.col("day") == target_day)
+    )
+    # ---------------------------------------------------------
 
     dst = _silver_path("signals")
     log.info("[signals] writing Silver Parquet → %s", dst)

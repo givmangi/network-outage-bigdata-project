@@ -79,11 +79,6 @@ def build_spark(app_name: str = "silver_ripe") -> SparkSession:
         SparkSession.builder
         .appName(app_name)
         .config("spark.sql.shuffle.partitions", "8")
-        # DYNAMIC: overwrite only the specific day partitions being written,
-        # not the entire silver/ripe/ping/ directory. STATIC (the wrong
-        # default) deletes the whole output tree before writing, so each
-        # day's run destroys all previously processed days — only the last
-        # partition in the loop survives.
         .config("spark.sql.sources.partitionOverwriteMode", "DYNAMIC")
         .config("spark.hadoop.fs.s3a.endpoint",           S3_ENDPOINT)
         .config("spark.hadoop.fs.s3a.access.key",         S3_ACCESS_KEY)
@@ -206,6 +201,20 @@ def process_ping(spark: SparkSession, date_partition: str) -> int:
         .withColumn("month", F.date_format("ts_utc", "MM"))
         .withColumn("day",   F.date_format("ts_utc", "dd"))
     )
+
+    # ---------------------------------------------------------
+    # NEW CODE: Boundary filter to prevent DYNAMIC spillover
+    # ---------------------------------------------------------
+    target_year = date_partition.split("/")[0].split("=")[1]
+    target_month = date_partition.split("/")[1].split("=")[1]
+    target_day = date_partition.split("/")[2].split("=")[1]
+
+    silver = silver.filter(
+        (F.col("year") == target_year) &
+        (F.col("month") == target_month) &
+        (F.col("day") == target_day)
+    )
+    # ---------------------------------------------------------
 
     dst = f"s3a://{SILVER_BUCKET}/ripe/ping"
     log.info("[ripe/ping] writing Silver Parquet → %s", dst)
