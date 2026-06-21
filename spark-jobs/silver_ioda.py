@@ -458,7 +458,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--end", default=None,
-        help="End date exclusive (YYYY-MM-DD). Omit to auto-discover all bronze partitions.",
+        help=(
+            "End date exclusive (YYYY-MM-DD). "
+            "Omit to default to yesterday when --start is provided."
+        ),
     )
     parser.add_argument(
         "--datasets", nargs="+",
@@ -519,14 +522,29 @@ def main() -> None:
             sys.exit(1)
 
     else:
-        if args.start is None or args.end is None:
-            log.error("Provide both --start and --end, or neither (auto-discover).")
+        if args.start is None:
+            log.error(
+                "Provide --start when --end is specified, or omit both for auto-discover."
+            )
             spark.stop()
             sys.exit(1)
+
         start = datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        end   = datetime.strptime(args.end,   "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        if args.end is None:
+            end = (
+                datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+                - timedelta(days=1)
+            )
+            log.info("No --end specified; defaulting to yesterday (%s).", end.strftime("%Y-%m-%d"))
+        else:
+            end = datetime.strptime(args.end, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+
         if start >= end:
             log.error("--start must be before --end")
+            spark.stop()
+            sys.exit(1)
+        if end.date() >= datetime.now(timezone.utc).date():
+            log.error("--end must be yesterday or earlier (no today/future partitions)")
             spark.stop()
             sys.exit(1)
         shared_partitions = _date_partitions_from_range(start, end)
