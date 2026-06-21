@@ -259,10 +259,13 @@ def _s3_key(layer: str, entity_type: str, entity_code: str,
       ioda/alerts/year=2026/month=06/day=04/country_IT_bgp.ndjson.gz
     """
     date_part = f"year={run_date.year:04d}/month={run_date.month:02d}/day={run_date.day:02d}"
+    ts_now = int(time.time()) # Grab the current unix timestamp
+        
     if datasource:
-        fname = f"{entity_type}_{entity_code}_{datasource}.ndjson.gz"
+        fname = f"{entity_type}_{entity_code}_{datasource}_{ts_now}.ndjson.gz"
     else:
-        fname = f"{entity_type}_{entity_code}.ndjson.gz"
+        fname = f"{entity_type}_{entity_code}_{ts_now}.ndjson.gz"
+            
     return f"ioda/{layer}/{date_part}/{fname}"
 
 
