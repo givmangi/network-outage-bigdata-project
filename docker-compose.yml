@@ -21,7 +21,7 @@
 services:
 
   # -------------------------------------------------------------------------
-  # Kafka (KRaft mode — no Zookeeper)
+  # Kafka (KRaft mode â€” no Zookeeper)
   # -------------------------------------------------------------------------
   kafka:
     image: confluentinc/cp-kafka:7.6.1
@@ -61,7 +61,7 @@ services:
       - outage-net
 
   # -------------------------------------------------------------------------
-  # Kafka UI — http://localhost:8080
+  # Kafka UI â€” http://localhost:8080
   # -------------------------------------------------------------------------
   kafka-ui:
     image: provectuslabs/kafka-ui:v0.7.2
@@ -79,8 +79,8 @@ services:
       - outage-net
 
   # -------------------------------------------------------------------------
-  # MinIO — S3-compatible object storage (bronze + silver + gold)
-  # Ports: 9000 (S3 API), 9001 (web console — http://localhost:9001)
+  # MinIO â€” S3-compatible object storage (bronze + silver + gold)
+  # Ports: 9000 (S3 API), 9001 (web console â€” http://localhost:9001)
   # -------------------------------------------------------------------------
   minio:
     image: minio/minio:RELEASE.2024-04-18T19-09-19Z
@@ -105,7 +105,7 @@ services:
       - outage-net
 
   # -------------------------------------------------------------------------
-  # MinIO init — bucket housekeeping (runs on every stack start)
+  # MinIO init â€” bucket housekeeping (runs on every stack start)
   # -------------------------------------------------------------------------
   # Creates bronze, silver, gold buckets.
   # Removes stale ioda-bronze and ioda-silver buckets from the original compose.
@@ -126,7 +126,6 @@ services:
         echo '--- Ensuring canonical buckets exist ---' &&
         mc mb --ignore-existing local/bronze &&
         mc mb --ignore-existing local/silver &&
-        mc mb --ignore-existing local/gold &&
         echo '--- Removing stale legacy buckets ---' &&
         mc rb --force local/ioda-bronze 2>/dev/null && echo 'Removed ioda-bronze' || echo 'ioda-bronze: not present or not empty, skipping' &&
         mc rb --force local/ioda-silver 2>/dev/null && echo 'Removed ioda-silver' || echo 'ioda-silver: not present or not empty, skipping' &&
@@ -205,7 +204,7 @@ services:
       - outage-net
 
   # =========================================================================
-  # SILVER LAYER — Batch jobs (on-demand, exit when done)
+  # SILVER LAYER â€” Batch jobs (on-demand, exit when done)
   # =========================================================================
   # Read:  s3a://bronze/...  (MinIO)
   # Write: s3a://silver/...  (MinIO)
@@ -280,7 +279,7 @@ services:
       - outage-net
 
   # =========================================================================
-  # SILVER LAYER — Structured Streaming (always-on, live Kafka path)
+  # SILVER LAYER â€” Structured Streaming (always-on, live Kafka path)
   # =========================================================================
   # Consumes Kafka topics from the Bronze ingesters.
   # Checkpoints in silver/_checkpoints/ persist offsets across restarts.
@@ -307,8 +306,8 @@ services:
       TIMESCALEDB_USER:        "${TIMESCALEDB_USER}"
       TIMESCALEDB_PASSWORD:    "${TIMESCALEDB_PASSWORD}"
     volumes:
-      - ./spark-jobs:/opt/spark-job
-    entrypoint: ["python3", "/opt/spark-job/submit.py", "stream"]
+      - ./spark-jobs:/opt/spark-jobs
+    entrypoint: ["python3", "/opt/spark-jobs/submit.py", "stream"]
     networks:
       - outage-net
 
@@ -338,60 +337,95 @@ services:
 
 
   spark-gold:
-    image: apache/spark:3.5.1
-    container_name: spark-gold
-    profiles: ["batch"]
-    depends_on:
-      minio-init:
-        condition: service_completed_successfully
-      timescaledb:
-        condition: service_healthy
-    environment:
-      S3_ENDPOINT_URL:      "http://minio:9000"
-      S3_ACCESS_KEY:        "${MINIO_ROOT_USER}"
-      S3_SECRET_KEY:        "${MINIO_ROOT_PASSWORD}"
-      S3_BUCKET_SILVER:     "silver"
-      TIMESCALEDB_USER:     "${TIMESCALEDB_USER}"
-      TIMESCALEDB_PASSWORD: "${TIMESCALEDB_PASSWORD}"
-    volumes:
-      - ./spark-jobs:/opt/spark-job
-    entrypoint: ["python3", "/opt/spark-job/submit.py", "gold"]
-    command: []
-    networks:
-      - outage-net
-
-
-  # jupyter:
-  #   image: jupyter/scipy-notebook:latest
-  #   container_name: ioda-jupyter
-  #   restart: unless-stopped
-  #   ports:
-  #     - "8888:8888"
-  #   environment:
-  #     JUPYTER_ENABLE_LAB: "yes"
-  #   volumes:
-  #     - ./notebooks:/home/jovyan/work
-  #   networks:
-  #     - outage-net
+      image: apache/spark:3.5.1
+      container_name: spark-gold
+      profiles: ["batch"]
+      depends_on:
+        minio-init:
+          condition: service_completed_successfully
+        timescaledb:
+          condition: service_healthy
+      environment:
+        S3_ENDPOINT_URL:      "http://minio:9000"
+        S3_ACCESS_KEY:        "${MINIO_ROOT_USER}"
+        S3_SECRET_KEY:        "${MINIO_ROOT_PASSWORD}"
+        S3_BUCKET_SILVER:     "silver"
+        TIMESCALEDB_USER:     "${TIMESCALEDB_USER}"
+        TIMESCALEDB_PASSWORD: "${TIMESCALEDB_PASSWORD}"
+      volumes:
+        - ./spark-jobs:/opt/spark-jobs
+      entrypoint: ["python3", "/opt/spark-jobs/submit.py", "gold"]
+      command: []
+      networks:
+        - outage-net
   
+    # =========================================================================
+    # GOLD LAYER â€” Streaming job (always-on, near-real-time path)
+    # =========================================================================
+    # Watches Silver Parquet files in MinIO for new micro-batches written by
+    # spark-silver-stream, and promotes them to TimescaleDB every 5 minutes.
+    #
+    # Replaces the need to run spark-gold on a cron after the initial backfill.
+    # Once running, TimescaleDB is updated automatically as Silver grows.
+    #
+    # Checkpoints: silver/_checkpoints/gold-ripe/ and gold-ioda/
+    # =========================================================================
+  spark-gold-stream:
+      image: apache/spark:3.5.1
+      container_name: spark-gold-stream
+      restart: unless-stopped
+      depends_on:
+        minio-init:
+          condition: service_completed_successfully
+        timescaledb:
+          condition: service_healthy
+        spark-silver-stream:
+          condition: service_started      # Silver must be running first
+      environment:
+        S3_ENDPOINT_URL:       "http://minio:9000"
+        S3_ACCESS_KEY:         "${MINIO_ROOT_USER}"
+        S3_SECRET_KEY:         "${MINIO_ROOT_PASSWORD}"
+        S3_BUCKET_SILVER:      "silver"
+        TIMESCALEDB_USER:      "${TIMESCALEDB_USER}"
+        TIMESCALEDB_PASSWORD:  "${TIMESCALEDB_PASSWORD}"
+        GOLD_STREAM_INTERVAL:  "${GOLD_STREAM_INTERVAL:-5 minutes}"
+      volumes:
+        - ./spark-jobs:/opt/spark-jobs
+      entrypoint: ["python3", "/opt/spark-jobs/submit.py", "gold-stream"]
+      networks:
+        - outage-net
+
+    # jupyter:
+    #   image: jupyter/scipy-notebook:latest
+    #   container_name: ioda-jupyter
+    #   restart: unless-stopped
+    #   ports:
+    #     - "8888:8888"
+    #   environment:
+    #     JUPYTER_ENABLE_LAB: "yes"
+    #   volumes:
+    #     - ./notebooks:/home/jovyan/work
+    #   networks:
+    #     - outage-net
+    
   dashboard:
-    build:
-      context: ./dashboard
-      dockerfile: Dockerfile
-    container_name: dashboard
-    restart: unless-stopped
-    ports:
-      - "8501:8501"
-    environment:
-      TIMESCALEDB_HOST:     "timescaledb"
-      TIMESCALEDB_USER:     "${TIMESCALEDB_USER}"
-      TIMESCALEDB_PASSWORD: "${TIMESCALEDB_PASSWORD}"
-      TIMESCALEDB_DB:       "outage_intelligence"
-    depends_on:
-      timescaledb:
-        condition: service_healthy
-    networks:
-      - outage-net
+      build:
+        context: ./dashboard
+        dockerfile: Dockerfile
+      container_name: dashboard
+      restart: unless-stopped
+      ports:
+        - "8501:8501"
+      environment:
+        TIMESCALEDB_HOST:     "timescaledb"
+        TIMESCALEDB_USER:     "${TIMESCALEDB_USER}"
+        TIMESCALEDB_PASSWORD: "${TIMESCALEDB_PASSWORD}"
+        TIMESCALEDB_DB:       "outage_intelligence"
+      depends_on:
+        timescaledb:
+          condition: service_healthy
+      networks:
+        - outage-net
 
 # -------------------------------------------------------------------------
 # Named volumes
