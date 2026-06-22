@@ -258,11 +258,11 @@ SELECT add_continuous_aggregate_policy(
 -- =============================================================================
 -- COMPRESSION POLICIES (keep DB size manageable)
 -- =============================================================================
--- Compress chunks older than 7 days — old telemetry is rarely queried at
--- raw resolution; the continuous aggregates cover historical analysis.
+-- Compress chunks older than 30 days
+-- old telemetry is rarely queried at raw resolution; the continuous aggregates cover historical analysis.
 
-SELECT add_compression_policy('asn_baselines',  INTERVAL '7 days',  if_not_exists => TRUE);
-SELECT add_compression_policy('ioda_signals',   INTERVAL '7 days',  if_not_exists => TRUE);
+SELECT add_compression_policy('asn_baselines',  INTERVAL '30 days',  if_not_exists => TRUE);
+SELECT add_compression_policy('ioda_signals',   INTERVAL '30 days',  if_not_exists => TRUE);
 SELECT add_compression_policy('outage_events',  INTERVAL '30 days', if_not_exists => TRUE);
 
 -- Columnar compression settings for the two hot tables
