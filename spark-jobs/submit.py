@@ -85,7 +85,7 @@ JOBS = {
         "packages": BASE_PACKAGES,
         "script":   "/opt/spark-jobs/gold_batch.py",
         "confs":    COMMON_CONFS,
-        "master":   "local[8]",  # cap at 8 cores since gold is IO bound
+        "master":   "local[4]",  # cap at 8 cores since gold is IO bound
     },
     # Gold streaming: reads Silver Parquet from MinIO, promotes to TimescaleDB.
     # Does NOT need Kafka packages (reads files, not topics).
@@ -120,7 +120,7 @@ master = job.get("master", "local[2]")
 cmd = [
     "/opt/spark/bin/spark-submit",
     "--master", master,
-    "--driver-memory", "4g", #trying to use more mem
+    "--driver-memory", "2g", #trying to use more mem
     "--conf", "spark.driver.maxResultSize=2g",  # default 1g too small
 
     "--packages", job["packages"],
