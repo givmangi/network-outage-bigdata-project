@@ -344,6 +344,10 @@ def process_signals(spark: SparkSession, date_partition: str) -> int:
     """
     src = _bronze_glob("signals", date_partition)
     log.info("[signals] reading from %s", src)
+    parts = dict(p.split("=") for p in date_partition.split("/"))
+    day_start = datetime(int(parts["year"]), int(parts["month"]), int(parts["day"]),
+                         tzinfo=timezone.utc)
+    day_end = day_start + timedelta(days=1)
 
     try:
         raw: DataFrame = (
@@ -370,6 +374,7 @@ def process_signals(spark: SparkSession, date_partition: str) -> int:
         .withColumn("value",       F.col("value").cast(DoubleType()))
         .withColumn("collection_gap", F.col("value").isNull())
         .drop("entityType", "entityCode")
+        .filter((F.col("ts_utc") >= F.lit(day_start)) & (F.col("ts_utc") < F.lit(day_end)))
         .dropDuplicates(["entity_type", "entity_code", "datasource", "ts"])
         # Zero-padded string partitions: month=06 not month=6
         .withColumn("year",  F.date_format("ts_utc", "yyyy"))
@@ -447,7 +452,8 @@ def _discover_partitions(spark: "SparkSession", layer: str) -> list[str]:
     except Exception as exc:
         log.warning("Could not list s3a://%s/ioda/%s/: %s", BRONZE_BUCKET, layer, exc)
 
-    return sorted(day_partitions)
+    today = datetime.now(timezone.utc).strftime("year=%Y/month=%m/day=%d")
+    return sorted(p for p in day_partitions if p < today)
 
 
 def _date_partitions_from_range(start: datetime, end: datetime) -> list[str]:
@@ -480,7 +486,7 @@ def parse_args() -> argparse.Namespace:
         "--end", default=None,
         help=(
             "End date exclusive (YYYY-MM-DD). "
-            "Omit to default to yesterday when --start is provided."
+            "Omit to default to today when --start is provided."
         ),
     )
     parser.add_argument(
@@ -551,11 +557,10 @@ def main() -> None:
 
         start = datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
         if args.end is None:
-            end = (
-                datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-                - timedelta(days=1)
-            )
-            log.info("No --end specified; defaulting to yesterday (%s).", end.strftime("%Y-%m-%d"))
+            end = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+            log.info("No --end specified; defaulting to today (exclusive): %s", end.strftime("%Y-%m-%d"))
+            #datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+            #    - timedelta(days=1)
         else:
             end = datetime.strptime(args.end, "%Y-%m-%d").replace(tzinfo=timezone.utc)
 
@@ -563,8 +568,11 @@ def main() -> None:
             log.error("--start must be before --end")
             spark.stop()
             sys.exit(1)
-        if end.date() >= datetime.now(timezone.utc).date():
-            log.error("--end must be yesterday or earlier (no today/future partitions)")
+        if end.date() > datetime.now(timezone.utc).date():
+            log.error("--end %s is in the future. --end is exclusive, so use today at most "
+                      "(e.g. --end %s to process through yesterday).",
+                      end.strftime("%Y-%m-%d"),
+                      datetime.now(timezone.utc).strftime("%Y-%m-%d"))
             spark.stop()
             sys.exit(1)
         shared_partitions = _date_partitions_from_range(start, end)

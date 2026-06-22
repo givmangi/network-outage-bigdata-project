@@ -125,6 +125,20 @@ def process_ping(spark: SparkSession, date_partition: str) -> int:
     src = f"s3a://{BRONZE_BUCKET}/ripe/ping/{date_partition}/*.ndjson.gz"
     log.info("[ripe/ping] reading from %s", src)
 
+    # Exact UTC bounds of the day this call is responsible for, parsed from
+    # date_partition (e.g. "year=2026/month=06/day=20"). Used below to throw
+    # out any record whose own ts_utc falls outside this day — without this,
+    # a handful of records near a day boundary (UTC offset/chunk-boundary
+    # timing in the source data) can get assigned to an *adjacent* day's
+    # year/month/day columns, and under DYNAMIC overwrite that adjacent
+    # day's correctly-written partition gets silently replaced by just those
+    # stray spillover records. This happens regardless of what --start/--end
+    # range is passed — it's intrinsic to this single day's bronze data.
+    parts = dict(p.split("=") for p in date_partition.split("/"))
+    day_start = datetime(int(parts["year"]), int(parts["month"]), int(parts["day"]),
+                          tzinfo=timezone.utc)
+    day_end = day_start + timedelta(days=1)
+
     try:
         raw: DataFrame = (
             spark.read
@@ -204,6 +218,9 @@ def process_ping(spark: SparkSession, date_partition: str) -> int:
         # Only keep records with a known country
         .filter(F.col("country_code").isNotNull())
         .filter(F.col("ts_utc").isNotNull())
+        # Anchor to the day actually being processed — drop any record whose
+        # own timestamp spills into an adjacent day (see comment above).
+        .filter((F.col("ts_utc") >= F.lit(day_start)) & (F.col("ts_utc") < F.lit(day_end)))
         .dropDuplicates(["msm_id", "probe_id_hash", "timestamp"])
         # Zero-padded string partitions
         .withColumn("year",  F.date_format("ts_utc", "yyyy"))
@@ -254,8 +271,8 @@ def _discover_partitions(spark: SparkSession) -> list[str]:
                     )
     except Exception as exc:
         log.warning("Could not list bronze/ripe/ping: %s", exc)
-
-    return sorted(day_partitions)
+    today = datetime.now(timezone.utc).strftime("year=%Y/month=%m/day=%d")
+    return sorted(p for p in day_partitions if p < today)
 
 
 def _date_partitions_from_range(start: datetime, end: datetime) -> list[str]:
@@ -275,7 +292,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--start", default=None,
                    help="Start date inclusive (YYYY-MM-DD). Omit to auto-discover.")
     p.add_argument("--end",   default=None,
-                   help="End date exclusive (YYYY-MM-DD). Defaults to yesterday when --start is provided.")
+                   help="End date exclusive (YYYY-MM-DD). Defaults to today when --start is provided "
++                        "(i.e. processes everything from --start through yesterday).")
+                   #help="End date exclusive (YYYY-MM-DD). Defaults to yesterday when --start is provided."
     return p.parse_args()
 
 
@@ -298,9 +317,19 @@ def main() -> None:
             spark.stop()
             sys.exit(1)
         if args.start is not None and args.end is None:
-            yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
-            args.end = yesterday.strftime("%Y-%m-%d")
-            log.info("No --end provided, defaulting to yesterday: %s", args.end)
+            #yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+            #args.end = yesterday.strftime("%Y-%m-%d")
+            #log.info("No --end provided, defaulting to yesterday: %s", args.end)
+            # --end is exclusive, so defaulting it to *today* (not yesterday)
+            # makes "--start X" alone mean "from X through yesterday" —
+            # i.e. everything up to but excluding today, which is what we
+            # actually want (today's data is still being live-streamed and
+            # shouldn't be touched by a batch run). Defaulting to yesterday
+            # instead breaks whenever --start IS yesterday, since start would
+            # equal end and trip the start >= end check below.
+            today = datetime.now(timezone.utc).date()
+            args.end = today.strftime("%Y-%m-%d")
+            log.info("No --end provided, defaulting to today (exclusive): %s", args.end)
 
         start = datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
         end   = datetime.strptime(args.end,   "%Y-%m-%d").replace(tzinfo=timezone.utc)
