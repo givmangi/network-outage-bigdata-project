@@ -70,7 +70,7 @@ S3_ACCESS_KEY        = os.environ.get("S3_ACCESS_KEY")
 S3_SECRET_KEY        = os.environ.get("S3_SECRET_KEY",          "")
 S3_BUCKET_BRONZE     = os.environ.get("S3_BUCKET_BRONZE",       "bronze")
 ENTITY_TYPE          = os.environ.get("ENTITY_TYPE",            "country")
-ENTITY_CODES         = os.environ.get("ENTITY_CODES",           "IT MM IN PK UA RU PS SY IR TR BD NG US DE GB").split()
+ENTITY_CODES         = os.environ.get("ENTITY_CODES",           "IT LV SK VE MM IN PK UA RU TR BD NG US DE GB").split()
 LOOKBACK_MINUTES     = int(os.environ.get("LOOKBACK_MINUTES",   "20"))
 POLL_INTERVAL_SEC    = int(os.environ.get("POLL_INTERVAL_SECONDS","900"))
 

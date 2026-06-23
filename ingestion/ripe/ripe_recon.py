@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 # Load the target countries from your .env file
 load_dotenv()
-env_string = os.environ.get("TARGET_COUNTRIES", "IT MM IN PK UA RU PS SY IR TR BD NG US DE GB")
+env_string = os.environ.get("TARGET_COUNTRIES", "IT LV SK VE MM IN PK UA RU TR BD NG US DE GB")
 COUNTRIES = env_string.split()
 
 PROBES_URL = "https://atlas.ripe.net/api/v2/probes/"
