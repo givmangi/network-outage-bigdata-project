@@ -661,6 +661,9 @@ def main() -> None:
 
     for stage_name in args.datasets:
         log.info("=== Stage: %s ===", stage_name)
+        fn = STAGES[stage_name]
+        for date_filter in date_partitions:
+            totals[stage_name] = totals.get(stage_name, 0) + fn(spark, date_filter)
 
     log.info("=" * 60)
     log.info("Gold batch complete. Totals: %s", totals)

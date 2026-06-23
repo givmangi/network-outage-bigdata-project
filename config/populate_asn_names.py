@@ -6,7 +6,7 @@ import os
 load_dotenv()
 
 conn = psycopg2.connect(
-    host="localhost", port=5432,
+    host="timescaledb", port=5432,
     dbname="outage_intelligence",
     user=os.environ["TIMESCALEDB_USER"],
     password=os.environ["TIMESCALEDB_PASSWORD"],

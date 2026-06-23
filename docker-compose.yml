@@ -249,11 +249,11 @@ services:
       S3_BUCKET_BRONZE: "bronze"
       S3_BUCKET_SILVER: "silver"
     volumes:
-      - ./spark-jobs:/opt/spark-job
+      - ./spark-jobs:/opt/spark-jobs
     # python submit.py is the entrypoint; 'ioda' selects the job.
     # Extra args from 'docker compose run spark-silver-ioda --start X --end Y'
     # replace command: and are forwarded to silver_ioda.py by submit.py.
-    entrypoint: ["python3", "/opt/spark-job/submit.py", "ioda"]
+    entrypoint: ["python3", "/opt/spark-jobs/submit.py", "ioda"]
     command: []
     networks:
       - outage-net
@@ -272,8 +272,8 @@ services:
       S3_BUCKET_BRONZE: "bronze"
       S3_BUCKET_SILVER: "silver"
     volumes:
-      - ./spark-jobs:/opt/spark-job
-    entrypoint: ["python3", "/opt/spark-job/submit.py", "ripe"]
+      - ./spark-jobs:/opt/spark-jobs
+    entrypoint: ["python3", "/opt/spark-jobs/submit.py", "ripe"]
     command: []
     networks:
       - outage-net

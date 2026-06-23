@@ -201,7 +201,10 @@ def process_alerts(spark: SparkSession, date_partition: str) -> int:
                 F.col("time") if "time" in available else F.col("from")
             )
         )
-        .withColumn("ts_until",         F.to_timestamp(F.col("until")))
+        # Protect 'until' the exact same way. If missing, make it null.
+        .withColumn("ts_until", 
+            F.to_timestamp(F.col("until")) if "until" in available else F.lit(None).cast("timestamp")
+        )
         .withColumn("entity_type",      entity_type_col)
         .withColumn("entity_code",      entity_code_col)
         .withColumn("datasource",       F.lower(F.col("datasource")))
@@ -286,21 +289,29 @@ def process_events(spark: SparkSession, date_partition: str) -> int:
         log.info("[events] no data for %s — skipping", date_partition)
         return 0
 
+    available = raw.columns
+
     silver = (
         raw
         # Entity is always a nested struct in events
         .withColumn("entity_type",  F.upper(F.col("entity.type")))
         .withColumn("entity_code",  F.upper(F.col("entity.code")))
         .withColumn("entity_name",  F.col("entity.name"))
-        # Timestamps
-        .withColumn("ts_from",      F.to_timestamp(F.col("from").cast(LongType())))
-        .withColumn("ts_until",     F.to_timestamp(F.col("until").cast(LongType())))
-        .withColumn("duration_sec", F.col("until").cast(LongType()) - F.col("from").cast(LongType()))
-        # Metrics
-        .withColumn("score",        F.col("score").cast(DoubleType()))
-        .withColumn("datasource",   F.lower(F.col("datasource")))
-        .withColumn("method",       F.col("method"))
-        # Drop the nested alerts array and raw fields
+        
+        # Safely handle Timestamps (protecting against missing 'from'/'time' and 'until')
+        .withColumn("raw_from",     F.col("from") if "from" in available else F.col("time") if "time" in available else F.lit(None))
+        .withColumn("raw_until",    F.col("until") if "until" in available else F.lit(None))
+        
+        .withColumn("ts_from",      F.to_timestamp(F.col("raw_from").cast(LongType())))
+        .withColumn("ts_until",     F.to_timestamp(F.col("raw_until").cast(LongType())))
+        .withColumn("duration_sec", F.col("raw_until").cast(LongType()) - F.col("raw_from").cast(LongType()))
+        
+        # Safely handle Metrics (protecting against missing fields)
+        .withColumn("score",        F.col("score").cast(DoubleType()) if "score" in available else F.lit(None).cast(DoubleType()))
+        .withColumn("datasource",   F.lower(F.col("datasource")) if "datasource" in available else F.lit(None))
+        .withColumn("method",       F.col("method") if "method" in available else F.lit(None))
+        
+        # Drop the nested alerts array, raw fields, and temp fields
         .select("entity_type", "entity_code", "entity_name",
                 "ts_from", "ts_until", "duration_sec",
                 "score", "datasource", "method")
