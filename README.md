@@ -44,6 +44,7 @@ This document provides a comprehensive overview of the system architecture, tech
   - [7.4 RIPE Atlas Probe Coverage](#74-ripe-atlas-probe-coverage)
   - [7.5 No Automated Alerting](#75-no-automated-alerting)
   - [7.6 Manual Setup Steps](#76-manual-setup-steps)
+  - [7.7 RIPE Atlas Volunteer Bias](#77-ripe-atlas-volunteer-bias)
 - [8. References](#8-references)
 - [9. Authors](#9-authors)
 
@@ -576,7 +577,11 @@ The platform detects and classifies outages with a confidence score but has no m
 ### 7.6 Manual Setup Steps
  
 Two one-time setup steps currently require manual intervention: running `ripe_recon.py` to build the probe-to-country mapping before first startup, and running `populate_asn_names.py` after each gold batch run to resolve new ASN numbers to provider names. Both could be automated — `ripe_recon.py` could be triggered on stack startup if the mapping file is missing or older than a configurable threshold, and `populate_asn_names.py` could be integrated as a final step in the gold batch job itself — reducing the risk of forgotten steps when onboarding new teammates or rebuilding from scratch.
+
+### 7.7 RIPE Atlas Volunteer Bias
  
+RIPE Atlas probes are hosted by volunteers who receive credits in exchange for running the hardware. This self-selection means the probe network is not a representative sample of internet users in a country — probes are disproportionately hosted by technically motivated individuals with above-average connectivity, predominantly in urban areas, and on fixed broadband or institutional networks. In countries like Myanmar, Bangladesh, Nigeria, and Pakistan, where the majority of internet access happens over mobile networks, a real outage affecting mobile users or rural areas may not be visible in RIPE Atlas measurements at all. The RTT and packet loss figures the platform reports should be interpreted as reflecting a technically privileged subset of users rather than the general population.
+
 ---
 
 ## 8. References
