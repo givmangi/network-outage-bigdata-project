@@ -21,9 +21,9 @@ This document provides a comprehensive overview of the system architecture, tech
   - [5.2 Clone the Repository](#52-clone-the-repository)
   - [5.3 Generate a Kafka Cluster ID](#53-generate-a-kafka-cluster-id)
   - [5.4 Create your .env File](#54-create-your-env-file)
-  - [5.5 Build the RIPE Probe Mapping](#55-build-the-ripe-probe-mapping-run-once)
-  - [5.6 Start the Always-On Stack](#56-start-the-always-on-stack)
-  - [5.7 Verify Everything is Running](#57-verify-everything-is-running)
+  - [5.5 Start the Always-On Stack](#55-start-the-always-on-stack)
+  - [5.6 Verify Everything is Running](#56-verify-everything-is-running)
+  - [5.7 Build the RIPE Probe Mapping](#57-build-the-ripe-probe-mapping-run-once)
   - [5.8 Backfill Historical Data](#58-backfill-historical-data-recommended)
   - [5.9 Run the Silver Batch Jobs](#59-run-the-silver-batch-jobs)
   - [5.10 Run the Gold Batch Job](#510-run-the-gold-batch-job)
@@ -182,14 +182,14 @@ The platform monitors 15 countries selected to cover a broad spectrum of interne
 | Code | Country | Rationale |
 |------|---------|-----------|
 | IT | Italy | Home country; provides local ground truth for the team |
+| LV | Latvia | Another home country; provides local ground truth for the team |
+| SK | Slovakia | Another home country; provides local ground truth for the team |
+| VE | Venezuela | Persistent throttling and platform blocks |
 | MM | Myanmar | World leader in shutdowns in 2024 with 85 recorded incidents |
 | IN | India | Second highest globally with 84 shutdowns in 2024 |
 | PK | Pakistan | Third highest globally with 21 shutdowns in 2024 |
 | UA | Ukraine | Active conflict zone; documented cross-border Russian disruptions to infrastructure |
 | RU | Russia | Major shutdown actor; significant economic and political internet restrictions |
-| PS | Palestine | Documented digital blackouts during conflict |
-| SY | Syria | Long-running infrastructure damage from prolonged conflict |
-| IR | Iran | Persistent censorship, throttling, and selective platform blocks |
 | TR | Turkey | Recurring social media blocks during political events |
 | BD | Bangladesh | 5 shutdowns in 2024; Signal blocked nationally |
 | NG | Nigeria | Africa's largest internet market; recurring outages and regulatory disruptions |
@@ -325,22 +325,7 @@ Open `.env` and fill in the following values:
 
 ---
 
-### 5.5 Build the RIPE Probe Mapping (run once)
- 
-This fetches all active RIPE Atlas probe IDs and ASNs for your target countries and saves them locally. Both the live ingester and the backfill use this file to filter the global measurement stream down to the target countries.
- 
-```bash
-cd ingestion/ripe
-pip install -r requirements.txt
-python3 ripe_recon.py
-cd ../..
-```
- 
-This produces `ingestion/ripe/ripe_probe_mapping.json`. Re-run it any time you change `TARGET_COUNTRIES`.
- 
----
-
-### 5.6 Start the Always-On Stack
+### 5.5 Start the Always-On Stack
  
 ```bash
 docker compose up -d
@@ -366,13 +351,25 @@ Wait until `minio-init` exits after printing the bucket list, `ioda-ingester` st
  
 ---
 
-### 5.7 Verify Everything is Running
+### 5.6 Verify Everything is Running
  
 ```bash
 docker compose ps
 ```
  
 All long-running services should show `healthy` or `running`.
+ 
+---
+
+### 5.7 Build the RIPE Probe Mapping (run once)
+ 
+This fetches all active RIPE Atlas probe IDs and ASNs for your target countries and saves them locally. Both the live ingester and the backfill use this file to filter the global measurement stream down to the target countries.
+ 
+```bash
+docker compose exec ripe-ingester python3 /app/ripe_recon.py
+```
+ 
+This produces `ingestion/ripe/ripe_probe_mapping.json`. Re-run it any time you change `TARGET_COUNTRIES`.
  
 ---
 
@@ -397,20 +394,26 @@ If `--countries` is omitted, IODA backfill uses `TARGET_COUNTRIES` from `.env`. 
  
 Transforms raw bronze NDJSON.gz into clean, Hive-partitioned Parquet in the silver layer.
  
-> ⚠️ **Run silver batch jobs with the streaming containers stopped.** Running `spark-silver-ioda` or `spark-silver-ripe` while `spark-silver-stream` or `spark-gold-stream` are active can corrupt the Spark streaming state (the `_spark_metadata` transaction log). Always follow this sequence:
+> ⚠️ **Run silver batch jobs with the streaming containers stopped.** Running `spark-silver-ioda` or `spark-silver-ripe` while `spark-silver-stream` or `spark-gold-stream` are active can corrupt the Spark streaming state (the `_spark_metadata` transaction log). Always follow this full sequence:
 > ```bash
+> # 1. Stop the streaming containers
 > docker compose stop spark-silver-stream spark-gold-stream
-> # run silver batch jobs
-> python3 config/fix_state.py   # clears corrupted streaming state
+>
+> # 2. Run silver batch jobs
+> docker compose run --rm --no-deps spark-silver-ioda
+> docker compose run --rm --no-deps spark-silver-ripe
+>
+> # 3. Run the gold batch job — set --start to match your earliest silver data
+> docker compose run --rm spark-gold --start 2026-06-17 #any start date you choose
+>
+> # 4. Clear the corrupted streaming state
+> python3 config/fix_state.py
+>
+> # 5. Restart the streams
 > docker compose up -d spark-silver-stream spark-gold-stream
 > ```
- 
-```bash
-docker compose run --rm --no-deps spark-silver-ioda
-docker compose run --rm --no-deps spark-silver-ripe
-```
- 
-Both jobs auto-discover all available bronze partitions if no date range is given, or you can scope them explicitly:
+
+Both silver batch jobs auto-discover all available bronze partitions if no date range is given, or you can scope them explicitly:
  
 ```bash
 docker compose run --rm --no-deps spark-silver-ioda --start 2026-05-28 --end 2026-06-04
@@ -429,24 +432,22 @@ Both jobs use Spark's dynamic partition overwrite mode — re-running is safe, o
 
 ### 5.10 Run the Gold Batch Job
  
-Aggregates silver into hourly RIPE ASN baselines, IODA country signals, outage events, and coverage stats, then writes all to TimescaleDB.
+Aggregates silver into hourly RIPE ASN baselines, IODA country signals, outage events, and coverage stats, then writes all to TimescaleDB. A start date is required — set it to match your earliest silver data:
  
 ```bash
-docker compose run --rm spark-gold
+docker compose run --rm spark-gold --start 2026-06-17
+docker compose run --rm spark-gold --start 2026-06-19 --end 2026-06-22
 ```
  
 You can scope the run to a date range or run individual stages:
  
 ```bash
-docker compose run --rm spark-gold --start 2026-06-19 --end 2026-06-22
-docker compose run --rm spark-gold --datasets ripe
-docker compose run --rm spark-gold --datasets ioda
-docker compose run --rm spark-gold --datasets outages
-docker compose run --rm spark-gold --datasets coverage
+docker compose run --rm spark-gold --start 2026-06-17 --datasets ripe
+docker compose run --rm spark-gold --start 2026-06-17 --datasets ioda
+docker compose run --rm spark-gold --start 2026-06-17 --datasets outages
+docker compose run --rm spark-gold --start 2026-06-17 --datasets coverage
 ```
- 
-> The gold batch job is safe to run while `spark-gold-stream` is active — it reads from silver (does not write to it) and writes to TimescaleDB via UPSERT, so it does not interfere with streaming state.
- 
+
 Verify rows landed:
  
 ```bash
