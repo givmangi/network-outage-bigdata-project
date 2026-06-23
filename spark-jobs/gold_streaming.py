@@ -350,7 +350,8 @@ def _write_outage_events(ripe_batch: DataFrame, ioda_batch: DataFrame, batch_id:
         .agg(
             F.expr("percentile_approx(packet_loss, 0.95)").alias("ripe_loss_p95"),
             F.expr("percentile_approx(rtt_avg_ms, 0.90)").alias("ripe_rtt_p90_ms"),
-            F.sum("probe_count").cast(IntegerType()).alias("ripe_probe_count"),
+            F.countDistinct("probe_id_hash").cast(IntegerType()).alias("ripe_probe_count"),
+            #F.sum("probe_count").cast(IntegerType()).alias("ripe_probe_count"),
         )
     )
 

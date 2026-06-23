@@ -645,7 +645,7 @@ def main() -> None:
     date_partitions: list[str | None]
     if args.start:
         start = datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        end_str = args.end or (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+        end_str = args.end or datetime.now(timezone.utc).strftime("%Y-%m-%d")
         end = datetime.strptime(end_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
         if start >= end:
             log.error("--start must be before --end")
