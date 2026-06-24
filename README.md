@@ -61,7 +61,7 @@ This platform aggregates real-time and historical network measurements from **RI
 
 ### 2.1 Architecture Overview
  
-![Architecture Pipeline](https://github.com/givmangi/network-outage-bigdata-project/blob/main/img/architecture_diagram.jpg)
+![Architecture Pipeline](https://github.com/givmangi/network-outage-bigdata-project/blob/main/img/diagrams/architecture_diagram.jpg)
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
@@ -111,7 +111,7 @@ This platform aggregates real-time and historical network measurements from **RI
  
 ### 2.2 Data Flow Diagram
  
-![Data Flow Diagram](https://github.com/givmangi/network-outage-bigdata-project/blob/main/img/data_pipeline.jpg)
+![Data Flow Diagram](https://github.com/givmangi/network-outage-bigdata-project/blob/main/img/diagrams/data_pipeline.jpg)
  
 ```
 IODA API   → ioda-ingester → Kafka (raw.ioda.alerts / events / signals)
@@ -515,36 +515,42 @@ docker compose down -v
 
 ## 6. Dashboard
  
-The dashboard is accessible at `http://localhost:8501` after the stack is running. It is built with Streamlit and reads exclusively from the TimescaleDB gold layer. A brief tour of the five tabs is provided below — screenshots will be added before the final submission.
- 
+The dashboard is accessible at `http://localhost:8501` after the stack is running. It is built with Streamlit and reads exclusively from the TimescaleDB gold layer. A brief tour of the five tabs is provided below.
+
 ### 6.1 Overview
  
-> 📌 *Screenshot to be added before final submission.*
- 
+![Overview](https://github.com/givmangi/network-outage-bigdata-project/blob/main/img/dashboard_screenshots/overview.png)
+![RTT-Times](https://github.com/givmangi/network-outage-bigdata-project/blob/main/img/dashboard_screenshots/rtt_times.png)
+
 Country-level health summary for the selected time window. Displays key metrics (median RTT, P95 packet loss, active ISPs, outage events), a status banner indicating whether hard outages or degraded periods were detected, and a timeline of detected outage events with severity classification.
  
 ### 6.2 Providers
  
-> 📌 *Screenshot to be added before final submission.*
- 
+![Providers Bubbleplot](https://github.com/givmangi/network-outage-bigdata-project/blob/main/img/dashboard_screenshots/providers_bubbleplot.png)
+![Providers Line Plot Over Time](https://github.com/givmangi/network-outage-bigdata-project/blob/main/img/dashboard_screenshots/providers_line.png)
+
 ISP-level analysis for the selected country. Shows RTT spread (P10–P90) and packet loss per provider over time, an ISP ranking table with average RTT, standard deviation, and packet loss, and flags providers with unusually high ICMP filtering rates.
  
 ### 6.3 Signals
- 
-> 📌 *Screenshot to be added before final submission.*
- 
+
+![Signals Compare](https://github.com/givmangi/network-outage-bigdata-project/blob/main/img/dashboard_screenshots/compared_signals.png) 
+![Signals Overlayed](https://github.com/givmangi/network-outage-bigdata-project/blob/main/img/dashboard_screenshots/signals_overlayed.png)
+
 Raw IODA signal traces for the selected country — BGP routing visibility, Merit darknet traffic, and active ping (/24 blocks). Each datasource is plotted independently, with collection gaps flagged. Allows the user to identify which signal layer first detected a degradation.
  
 ### 6.4 Correlation
  
-> 📌 *Screenshot to be added before final submission.*
+![Overlay Degradation](https://github.com/givmangi/network-outage-bigdata-project/blob/main/img/dashboard_screenshots/overlay_degradation.png)
+![Loss vs Signals](https://github.com/givmangi/network-outage-bigdata-project/blob/main/img/dashboard_screenshots/loss_vs_signals.png)
  
 Combined RIPE Atlas and IODA overlay. Plots RIPE RTT alongside a chosen IODA signal on a dual-axis chart, with detected outage event markers superimposed. A normalised loss-vs-signal panel allows visual confirmation of correlated drops across independent data sources.
  
 ### 6.5 Cross-Country
  
-> 📌 *Screenshot to be added before final submission.*
- 
+![Countries Bubbleplot](https://github.com/givmangi/network-outage-bigdata-project/blob/main/img/dashboard_screenshots/countries_bubbleplot.png)
+![Countries RTT Histogram](https://github.com/givmangi/network-outage-bigdata-project/blob/main/img/dashboard_screenshots/countries_rtt_histogram.png)
+
+
 Multi-country comparison view. A bubble chart maps all 15 countries by average RTT vs packet loss, with bubble size proportional to detected outage hours. Supports side-by-side RTT time series and outage event alignment across up to four countries simultaneously, to identify whether events are local or affect a shared upstream provider.
 
 See `dashboard/README.md` for dashboard-specific details.
