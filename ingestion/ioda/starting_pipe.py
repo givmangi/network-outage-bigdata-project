@@ -1,20 +1,22 @@
 """
-IODA Bronze Ingestion — Kafka + MinIO backend
-===============================================
-This is the containerised version of ioda_bronze_ingestion.py adapted for
-the Docker stack. Two key differences from the original script:
+ingestion/ioda/starting_pipe.py — IODA Bronze Ingestion Core
+=============================================================
+Core ingestion module for the IODA data source. Fetches alerts, events, and
+signal data from the IODA REST API and writes them to both Kafka and MinIO
+(bronze layer). Not run directly — always imported and driven by run_loop.py.
 
-1. Every ingested record is published to a Kafka topic in addition to
-   being written to MinIO. Kafka is the real-time transport layer;
-   MinIO is the durable persistence layer. Both receive the same data.
-
-2. All configuration (credentials, endpoints, entity codes) is read from
-   environment variables injected by Docker Compose — no CLI flags needed
-   when running inside the container.
+Two entry points:
+  run_once()      — fetches the last LOOKBACK_MINUTES of data for all
+                    configured entities. Called by run_loop.py on every
+                    poll cycle (default: every 900 seconds).
+  run_backfill()  — fetches full days of historical data working backwards
+                    from today. Called by run_loop.py when invoked with
+                    the 'backfill <days>' argument, which is triggered by
+                    backfill.py on the host.
 
 Data flow per ingestion run:
                          ┌─────────────────────────────────────┐
-  IODA REST API  ──────► │  Python ingester (this script)      │
+  IODA REST API  ──────► │  starting_pipe.py (this module)     │
                          │                                     │
                          │  _paginate_alerts()                 │
                          │  _paginate_events()                 │
@@ -29,16 +31,19 @@ Data flow per ingestion run:
           raw.ioda.signals             ioda/events/year=.../
                                        ioda/signals/year=.../
 
-Kafka topics created:
-  raw.ioda.alerts   - one message per alert object, key = entity_code
-  raw.ioda.events   - one message per event object, key = entity_code
-  raw.ioda.signals  - one message per expanded time-step row, key = entity_code
+Kafka topics:
+  raw.ioda.alerts   — one message per alert object, key = entity_code
+  raw.ioda.events   — one message per event object, key = entity_code
+  raw.ioda.signals  — one message per expanded time-step row, key = entity_code
 
 MinIO object layout (Hive-partitioned for Spark):
   bronze/
-    ioda/alerts/year=YYYY/month=MM/day=DD/<entity_type>_<code>_<datasource>.ndjson.gz
-    ioda/events/year=YYYY/month=MM/day=DD/<entity_type>_<code>.ndjson.gz
-    ioda/signals/year=YYYY/month=MM/day=DD/<entity_type>_<code>_<datasource>.ndjson.gz
+    ioda/alerts/year=YYYY/month=MM/day=DD/<entity_type>_<code>_<datasource>_<ts>.ndjson.gz
+    ioda/events/year=YYYY/month=MM/day=DD/<entity_type>_<code>_<ts>.ndjson.gz
+    ioda/signals/year=YYYY/month=MM/day=DD/<entity_type>_<code>_<datasource>_<ts>.ndjson.gz
+
+Configuration: all from environment variables injected by Docker Compose.
+  See docker-compose.yml (ingester service) for the full list.
 """
 
 from __future__ import annotations
@@ -328,7 +333,6 @@ def _dual_write(
     return count
 
 
-# In ioda_ingest.py, replace the put_object call in _dual_write() with:
 
 
 def _s3_put_with_retry(s3_client, bucket, key, body, max_attempts=3):
