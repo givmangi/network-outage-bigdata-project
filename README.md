@@ -61,7 +61,7 @@ This platform aggregates real-time and historical network measurements from **RI
 
 ### 2.1 Architecture Overview
  
-> 📌 *A visual architecture diagram will be added here before the final submission.*
+![Architecture Pipeline](https://github.com/givmangi/network-outage-bigdata-project/blob/main/img/architecture_diagram.jpg)
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
@@ -111,7 +111,7 @@ This platform aggregates real-time and historical network measurements from **RI
  
 ### 2.2 Data Flow Diagram
  
-> 📌 *A visual data flow diagram will be added here before the final submission.*
+![Data Flow Diagram](https://github.com/givmangi/network-outage-bigdata-project/blob/main/img/data_pipeline.jpg)
  
 ```
 IODA API   → ioda-ingester → Kafka (raw.ioda.alerts / events / signals)
