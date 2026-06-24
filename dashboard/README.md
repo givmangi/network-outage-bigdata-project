@@ -28,9 +28,17 @@ data sources that IODA uses to detect large-scale connectivity events:
 Signal scores are not directly comparable in scale to RTT, which is why the
 Correlation tab uses a dual-axis chart.
 
-**Confidence score** — a weighted combination of RIPE and IODA evidence
-(BGP 35%, RIPE loss 35%, darknet 20%, active ping 10%) used to classify
-each detected event as `hard_outage`, `degraded`, or `possible`.
+**Confidence score** — a weighted combination of evidence from RIPE and IODA,
+computed by `gold_batch.py` for each (country, hour) where both sources have data:
+- RIPE packet loss (`loss_p95_pct`): weight 0.35 — scored as 1.0 if loss > 20%,
+  0.5 if loss is between 10–20%, 0.0 otherwise
+- BGP signal drop: weight 0.35 — scored as 1.0 if drop exceeds 5% vs 24-h baseline
+- Darknet traffic drop: weight 0.20 — scored as 1.0 if drop exceeds 10% vs 24-h baseline
+- Active ping drop: weight 0.10 — scored as 1.0 if drop exceeds 10% vs 24-h baseline
+
+The resulting score (0.0–1.0) maps to severity: `hard_outage` (≥ 0.70),
+`degraded` (≥ 0.45), `possible` (≥ 0.20). Events scoring below 0.20 are
+classified as `noise` and not stored.
 
 **ICMP filtering** — some routers rate-limit or silently drop ICMP ping packets,
 making measurements appear as packet loss when the network is actually healthy.
@@ -64,6 +72,11 @@ To populate ASN provider names (run once after the gold batch job):
 docker compose exec dashboard python3 /app/populate_asn_names.py
 ```
 
+## Navigation
+
+The sidebar controls apply across all tabs: use it to select the country,
+set the time window, and add countries for cross-country comparison.
+
 ## Tabs
 
 - **Overview** — country health at a glance. Key metrics (median RTT, P95 packet
@@ -93,5 +106,5 @@ docker compose exec dashboard python3 /app/populate_asn_names.py
 | `asn_baselines` | Hourly RIPE RTT and packet loss aggregates per ASN |
 | `ioda_signals` | Raw IODA signal values at native resolution (5/10 min) |
 | `outage_events` | Correlated outage detections with confidence score and severity |
-| `country_coverage` | Daily probe and measurement counts per country (data quality) |
 | `asn_names` | ASN → ISP name lookup, populated via `populate_asn_names.py` |
+| `country_coverage` | Daily probe and measurement counts per country, populated by the gold batch job; reserved for future data quality warnings in the dashboard |

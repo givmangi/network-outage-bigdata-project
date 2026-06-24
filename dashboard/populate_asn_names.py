@@ -1,9 +1,33 @@
+"""
+config/populate_asn_names.py
+=============================
+Pipeline role:  One-time (or on-demand) ASN name resolution utility.
+
+Purpose:        Queries the `asn_baselines` table for all distinct ASN numbers,
+                resolves them to human-readable ISP names and country codes via
+                Team Cymru's bulk WHOIS service, and upserts the results into
+                the `asn_names` lookup table. The dashboard LEFT JOINs
+                `asn_names` onto `asn_baselines` to display provider names
+                (e.g. "FASTWEB - Fastweb SpA") instead of bare AS numbers.
+
+Inputs:         TimescaleDB `asn_baselines` table (reads distinct ASNs).
+                Team Cymru bulk WHOIS (whois.cymru.com:43, TCP).
+
+Outputs:        TimescaleDB `asn_names` table (upsert — safe to re-run).
+
+Usage:          Run once after the first gold batch job, and re-run any time
+                new ASNs appear in asn_baselines that are not yet resolved
+                (see README §5.11):
+
+                    docker compose exec dashboard python3 /app/populate_asn_names.py
+
+Credentials:    Reads TIMESCALEDB_USER and TIMESCALEDB_PASSWORD from the
+                container environment (injected by Docker Compose from .env).
+"""
+
+import os
 import socket
 import psycopg2
-from dotenv import load_dotenv
-import os
-
-load_dotenv()
 
 conn = psycopg2.connect(
     host="timescaledb", port=5432,

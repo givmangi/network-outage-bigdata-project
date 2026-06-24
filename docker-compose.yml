@@ -330,7 +330,7 @@ services:
     networks:
       - outage-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U admin -d outage_intelligence"]
+      test: ["CMD-SHELL", "pg_isready -U ${TIMESCALEDB_USER} -d outage_intelligence"]
       interval: 10s
       timeout: 5s
       retries: 5

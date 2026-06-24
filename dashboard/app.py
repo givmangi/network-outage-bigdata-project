@@ -172,8 +172,8 @@ DS_LABELS = {
 # DB connection
 # ---------------------------------------------------------------------------
 
-DB_USER = os.environ.get("TIMESCALEDB_USER", "admin")
-DB_PASS = os.environ.get("TIMESCALEDB_PASSWORD", "password123")
+DB_USER = os.environ.get("TIMESCALEDB_USER")
+DB_PASS = os.environ.get("TIMESCALEDB_PASSWORD")
 DB_HOST = os.environ.get("TIMESCALEDB_HOST", "timescaledb")
 DB_NAME = os.environ.get("TIMESCALEDB_DB", "outage_intelligence")
 

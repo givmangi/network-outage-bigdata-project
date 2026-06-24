@@ -1,17 +1,35 @@
 """
 backfill.py — Master Historical Data Loader (IODA & RIPE)
 =========================================================
-Orchestrates historical data backfills across different ingestion containers.
+Orchestrates historical data backfills by spawning the appropriate
+ingestion containers via docker compose run.
+
+Run from the project root on the host (reads .env via python-dotenv).
 
 Usage:
-    python backfill.py --source ioda --days 7          # IODA only
-    python backfill.py --source ripe --days 7          # RIPE only
-    python backfill.py --source all  --days 30         # Both sources
+    python3 backfill.py --source ioda --days 7          # IODA only
+    python3 backfill.py --source ripe --days 1          # RIPE only
+    python3 backfill.py --source all  --days 7          # Both sources
+    python3 backfill.py --dry-run                       # Preview without executing
 
-    # IODA specific filtering:
-    python backfill.py --source ioda --countries IT IQ --days 7
+    # IODA specific country filtering:
+    python3 backfill.py --source ioda --countries IT IQ --days 7
+
+Country selection (IODA only):
+    --countries overrides everything. If omitted, TARGET_COUNTRIES from .env
+    is used. If that is also absent, all ~253 IODA country codes are fetched
+    and used. RIPE backfill has no per-country option — it always covers
+    whatever countries are in ripe_probe_mapping.json.
+
+Timing note (see README §5.8):
+    IODA: ~75 seconds per country.
+    RIPE: ~2 hours per day of data — limit to 1-3 days on a laptop.
 """
+
 from dotenv import load_dotenv, find_dotenv
+
+load_dotenv()
+
 import os
 import argparse
 import subprocess
@@ -98,7 +116,6 @@ def run_ripe_backfill(days: int, dry_run: bool) -> bool:
         return False
 
 def main():
-    load_dotenv() # Load variables from .env
     
     parser = argparse.ArgumentParser(description="Master Backfill Orchestrator (IODA & RIPE)")
     parser.add_argument("--source", choices=["ioda", "ripe", "all"], default="all", help="Which data source to backfill.")
