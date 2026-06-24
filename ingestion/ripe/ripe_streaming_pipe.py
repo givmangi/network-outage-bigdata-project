@@ -23,10 +23,10 @@ import boto3
 from kafka import KafkaProducer
 from botocore.exceptions import ClientError
 import websocket
-from dotenv import load_dotenv  # <--- NEW
+from dotenv import load_dotenv  
 
 # Load environment variables from the .env file in your project root!
-load_dotenv() # <--- NEW
+load_dotenv() 
 
 # ---------------------------------------------------------------------------
 # Configuration

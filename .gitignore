@@ -12,7 +12,7 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-.venv/
+.venv/ 
 venv/
 
 # Docker local data volumes

@@ -51,8 +51,8 @@ S3_ACCESS_KEY     = os.environ.get("S3_ACCESS_KEY")
 S3_SECRET_KEY     = os.environ.get("S3_SECRET_KEY")
 SILVER_BUCKET     = os.environ.get("S3_BUCKET_SILVER",        "silver")
 
-DB_USER           = os.environ.get("TIMESCALEDB_USER",        "admin")
-DB_PASS           = os.environ.get("TIMESCALEDB_PASSWORD",    "password123")
+DB_USER           = os.environ.get("TIMESCALEDB_USER")
+DB_PASS           = os.environ.get("TIMESCALEDB_PASSWORD")
 DB_HOST           = "timescaledb"
 DB_NAME           = "outage_intelligence"
 DB_URL            = f"jdbc:postgresql://{DB_HOST}:5432/{DB_NAME}"

@@ -61,13 +61,11 @@ DB_PROPS = {
     "batchsize":  "3000",  
 }
 
-# Thresholds for outage correlation
-LOSS_OUTAGE_THRESHOLD    = 0.20   # 20% packet loss → RIPE evidence
-LOSS_DEGRADED_THRESHOLD  = 0.10   # 10% packet loss → possible
-BGP_DROP_THRESHOLD       = 0.05   # 5% BGP signal drop → evidence
-MERIT_DROP_THRESHOLD     = 0.10   # 10% darknet drop → evidence
-PING_DROP_THRESHOLD      = 0.10   # 10% active-ping drop → evidence
-
+LOSS_OUTAGE_THRESHOLD    = 0.20   
+LOSS_DEGRADED_THRESHOLD  = 0.10   
+BGP_DROP_THRESHOLD       = 0.05   
+MERIT_DROP_THRESHOLD     = 0.10  
+PING_DROP_THRESHOLD      = 0.10   
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
@@ -356,7 +354,7 @@ def run_outage_correlation(spark: SparkSession, date_filter: str | None) -> int:
         log.warning("[outage_correlation] empty source tables — skipping")
         return 0
 
-    # Apply date filter if provided
+    # apply date filter if provided
     if date_filter:
         # date_filter is like "year=2026/month=06/day=19"
         # parse it to a date range
@@ -391,7 +389,7 @@ def run_outage_correlation(spark: SparkSession, date_filter: str | None) -> int:
         )
     )
 
-    # Count ASNs with loss > threshold
+    # count ASNs with loss > threshold
     asn_with_loss = (
         ripe_df
         .filter(F.col("loss_p95_pct") > LOSS_DEGRADED_THRESHOLD)
@@ -441,7 +439,7 @@ def run_outage_correlation(spark: SparkSession, date_filter: str | None) -> int:
     )
 
     # -----------------------------------------------------------------------
-    # Join RIPE + IODA and score
+    # join RIPE + IODA and score
     # -----------------------------------------------------------------------
     joined = (
         ripe_country
@@ -452,7 +450,7 @@ def run_outage_correlation(spark: SparkSession, date_filter: str | None) -> int:
         )
     )
 
-    # Compute evidence flags and confidence score
+    # compute evidence flags and confidence score
     scored = (
         joined
         # RIPE evidence
@@ -474,7 +472,7 @@ def run_outage_correlation(spark: SparkSession, date_filter: str | None) -> int:
             F.when(F.col("ping_pct_change") < -PING_DROP_THRESHOLD, F.lit(1.0))
              .otherwise(F.lit(0.0))
         )
-        # Weighted confidence (BGP highest — control-plane is ground truth)
+        # weighted confidence (BGP highest — control-plane is ground truth)
         .withColumn("confidence_score",
             (F.col("ripe_evidence")  * 0.35 +
              F.col("bgp_evidence")   * 0.35 +
@@ -482,14 +480,14 @@ def run_outage_correlation(spark: SparkSession, date_filter: str | None) -> int:
              F.col("ping_evidence")  * 0.10)
             .cast(DoubleType())
         )
-        # Severity classification
+        # severity classification
         .withColumn("severity",
             F.when(F.col("confidence_score") >= 0.70, F.lit("hard_outage"))
              .when(F.col("confidence_score") >= 0.45, F.lit("degraded"))
              .when(F.col("confidence_score") >= 0.20, F.lit("possible"))
              .otherwise(F.lit("noise"))
         )
-        # Only store actionable events (noise is meaningless clutter)
+        # only store actionable events (noise is meaningless clutter)
         .filter(F.col("severity") != "noise")
         .select(
             F.col("time_window").alias("detected_at"),
