@@ -541,7 +541,7 @@ Raw IODA signal traces for the selected country — BGP routing visibility, Meri
 ### 6.4 Correlation
  
 ![Overlay Degradation](https://github.com/givmangi/network-outage-bigdata-project/blob/main/img/dashboard_screenshots/overlay_degradation.png)
-![Loss vs Signals](https://github.com/givmangi/network-outage-bigdata-project/blob/main/img/dashboard_screenshots/loss_vs_signals.png)
+![Loss vs Signals](https://github.com/givmangi/network-outage-bigdata-project/blob/main/img/dashboard_screenshots/loss_vs_signal.png)
  
 Combined RIPE Atlas and IODA overlay. Plots RIPE RTT alongside a chosen IODA signal on a dual-axis chart, with detected outage event markers superimposed. A normalised loss-vs-signal panel allows visual confirmation of correlated drops across independent data sources.
  
