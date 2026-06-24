@@ -45,6 +45,7 @@ This document provides a comprehensive overview of the system architecture, tech
   - [7.5 No Automated Alerting](#75-no-automated-alerting)
   - [7.6 Manual Setup Steps](#76-manual-setup-steps)
   - [7.7 RIPE Atlas Volunteer Bias](#77-ripe-atlas-volunteer-bias)
+  - [7.8 Redundant RIPE Measurement IDs](#78-redundant-ripe-measurement-ids)
 - [8. References](#8-references)
 - [9. Authors](#9-authors)
 
@@ -581,6 +582,10 @@ Two one-time setup steps currently require manual intervention: running `ripe_re
 ### 7.7 RIPE Atlas Volunteer Bias
  
 RIPE Atlas probes are hosted by volunteers who receive credits in exchange for running the hardware. This self-selection means the probe network is not a representative sample of internet users in a country — probes are disproportionately hosted by technically motivated individuals with above-average connectivity, predominantly in urban areas, and on fixed broadband or institutional networks. In countries like Myanmar, Bangladesh, Nigeria, and Pakistan, where the majority of internet access happens over mobile networks, a real outage affecting mobile users or rural areas may not be visible in RIPE Atlas measurements at all. The RTT and packet loss figures the platform reports should be interpreted as reflecting a technically privileged subset of users rather than the general population.
+
+### 7.8 Redundant RIPE Measurement IDs
+ 
+The platform ingests all 13 built-in RIPE Atlas IPv6 ping measurements, each targeting a different DNS root server (a– through m-root). In practice, outage signals are highly correlated across all 13 — if a country loses connectivity, all measurements drop simultaneously. A representative subset of 5 measurements targeting root servers from different operators and geographic anycast distributions would likely provide equivalent outage detection power at less than half the data volume, making historical backfills significantly faster and reducing the risk of memory exhaustion during long backfill runs.
 
 ---
 
