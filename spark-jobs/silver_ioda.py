@@ -17,7 +17,7 @@ Silver layout produced:
 
 Design principles:
   - Schema-on-read: explicit schemas prevent silent drift if IODA changes field types.
-  - Idempotent: output is overwritten by partition — re-running the same day is safe.
+  - Idempotent: output is overwritten by partition, re-running the same day is safe.
   - Partition pruning: output partitioned by (year, month, day) matching the Gold layer.
 
 Usage (via docker compose):
