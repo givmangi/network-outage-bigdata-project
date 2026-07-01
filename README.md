@@ -62,54 +62,7 @@ This platform aggregates real-time and historical network measurements from **RI
 ### 2.1 Architecture Overview
  
 ![Architecture Pipeline](https://github.com/givmangi/network-outage-bigdata-project/blob/main/img/diagrams/architecture_diagram.jpg)
-
-```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│  outage-net (Docker bridge network)                                          │
-│                                                                              │
-│  ┌──────────────┐   raw.ioda.*   ┌──────────────┐   raw.ripe.ping           │
-│  │ ioda-ingester│ ───topics────► │              │ ◄───topics───────┐        │
-│  │  (IODA, poll)│                │    kafka      │                 │        │
-│  │              │── put_object ─►│ (KRaft, 9092) │            ┌────┴───────┐│
-│  └──────────────┘      │         └──────┬───────┘            │ripe-ingester││
-│                         │               │                     │ (websocket) ││
-│                         ▼               ▼                     └────┬───────┘│
-│                  ┌────────────────────────────┐  put_object        │        │
-│                  │           minio            │◄──────────────────┘         │
-│                  │  (S3 API: 9000, console)   │                             │
-│                  │     bronze / silver        │                             │
-│                  └──────────────┬─────────────┘                             │
-│                                 │                                            │
-│                    ┌────────────┴─────────────┐                             │
-│                    ▼                           ▼                             │
-│          spark-silver-ioda /          spark-silver-stream                   │
-│          spark-silver-ripe            (always-on, Kafka → silver)           │
-│          (on-demand batch jobs,                │                             │
-│           run via the "batch" profile)         │                             │
-│                    │                           ▼                             │
-│                    │                  spark-gold-stream                      │
-│                    │              (always-on, silver → TimescaleDB)          │
-│                    │                           │                             │
-│                    ▼                           │                             │
-│              spark-gold                        │                             │
-│       (on-demand batch job, silver → TimescaleDB)                           │
-│                    │                           │                             │
-│                    └───────────────┬───────────┘                            │
-│                                    ▼                                         │
-│                             timescaledb                                      │
-│      (asn_baselines/ioda_signals/outage_events/country_coverage/asn_names)   │
-│                                    │                                         │
-│                                    ▼                                         │
-│                              dashboard                                       │
-│                        (Streamlit, port 8501)                                │
-│                                                                              │
-│  ┌──────────────┐                                                            │
-│  │   kafka-ui   │  (web, port 8080)                                          │
-│  └──────────────┘                                                            │
-└──────────────────────────────────────────────────────────────────────────────┘
-```
- 
-### 2.2 Data Flow Diagram
+## 2.2 Data Flow Diagram
  
 ![Data Flow Diagram](https://github.com/givmangi/network-outage-bigdata-project/blob/main/img/diagrams/data_pipeline.jpg)
  
